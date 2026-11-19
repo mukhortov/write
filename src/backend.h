@@ -145,6 +145,7 @@ signals:
 private:
     friend class WriteTest;
 
+    void load(const QUrl &url, bool reloading);
     void loadDocumentText(const QString &text);
     qreal steppedTextZoom(int direction) const;
     void setFileUrl(const QUrl &url);

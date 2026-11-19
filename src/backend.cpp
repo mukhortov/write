@@ -306,6 +306,10 @@ void Backend::openDialog() {
 }
 
 void Backend::open(const QUrl &url) {
+    load(url, false);
+}
+
+void Backend::load(const QUrl &url, bool reloading) {
     if (!url.isLocalFile()) {
         setStatus(QStringLiteral("Only local files can be opened."));
         return;
@@ -333,12 +337,14 @@ void Backend::open(const QUrl &url) {
     watchCurrentFile();
     setModified(false);
     if (savesUnchanged(raw)) {
-        setStatus(QStringLiteral("Opened"));
+        setStatus(reloading ? QStringLiteral("Reloaded") : QStringLiteral("Opened"));
     } else {
         // Saving writes UTF-8 with plain line endings, which would change
         // bytes this file holds. Leave that to an explicit save.
         suspendAutoSave();
-        setStatus(QStringLiteral("Opened. Auto-save is off to keep its encoding and line endings."));
+        setStatus(reloading
+                      ? QStringLiteral("Reloaded. Auto-save is off to keep its encoding and line endings.")
+                      : QStringLiteral("Opened. Auto-save is off to keep its encoding and line endings."));
     }
 }
 
@@ -400,7 +406,7 @@ void Backend::openOrStartFile(const QUrl &requestedUrl) {
 
 void Backend::reloadFromDisk() {
     if (m_fileUrl.isLocalFile())
-        open(m_fileUrl);
+        load(m_fileUrl, true);
 }
 
 void Backend::keepExternalVersion() {

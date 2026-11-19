@@ -2873,7 +2873,7 @@ private slots:
         QTRY_COMPARE(readFile(path), QByteArray("undecided"));
     }
 
-    void keepsTheWritersTextWhenTheChangeDialogIsDismissed() {
+    void asksWhichVersionToKeepOverUnsavedChanges() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString path = directory.filePath(QStringLiteral("changed.md"));
@@ -2883,14 +2883,23 @@ private slots:
         fixture.backend.open(QUrl::fromLocalFile(path));
         fixture.load(QStringLiteral("mine\n"));
 
-        // Esc closes the sheet without a choice, and the writer's text stays.
+        // Esc leaves the sheet up, as both answers give up a version. On the
+        // Cocoa platform Cmd+. is Cancel too, and does the same.
         emit fixture.backend.externalChangeDetected(false, true);
         QTRY_VERIFY(sheet(&fixture.window, QStringLiteral("externalChangeSheet")));
         QMessageBox *asked = sheet(&fixture.window, QStringLiteral("externalChangeSheet"));
         QCOMPARE(asked->text(), QStringLiteral("File changed"));
         QCOMPARE(asked->informativeText(),
                  QStringLiteral("This file changed outside Write. Reloading will discard your changes."));
-        QTest::keyClick(asked, Qt::Key_Escape);
+        for (const QKeySequence &cancel : QKeySequence::keyBindings(QKeySequence::Cancel))
+            QTest::keySequence(asked, cancel);
+        QCoreApplication::processEvents();
+        QCOMPARE(sheet(&fixture.window, QStringLiteral("externalChangeSheet")), asked);
+        QCOMPARE(fixture.text(), QStringLiteral("mine\n"));
+
+        // Return keeps the writer's text, which holds what the file does not.
+        QCOMPARE(asked->defaultButton()->objectName(), QStringLiteral("keepButton"));
+        QTest::keyClick(asked, Qt::Key_Return);
         QTRY_VERIFY(!sheet(&fixture.window, QStringLiteral("externalChangeSheet")));
         QCOMPARE(fixture.text(), QStringLiteral("mine\n"));
         QVERIFY(fixture.backend.modified());
@@ -3551,7 +3560,8 @@ private slots:
         QVERIFY(!fixture.window.close());
         QCoreApplication::processEvents();
         QCOMPARE(visibleSheets(), 1);
-        QTest::keyClick(sheet(&fixture.window, QStringLiteral("externalChangeSheet")), Qt::Key_Escape);
+        sheet(&fixture.window, QStringLiteral("externalChangeSheet"))
+            ->findChild<QPushButton *>(QStringLiteral("keepButton"))->click();
         QTRY_VERIFY(fixture.window.commandsEnabled());
         QCOMPARE(fixture.text(), QStringLiteral("unsaved"));
         fixture.backend.discardRecovery();
@@ -4857,12 +4867,82 @@ private slots:
         QCOMPARE(fixture.editor->textCursor().position(), 0);
         QCOMPARE(fixture.editor->verticalScrollBar()->value(), 0);
 
-        // Reloading opens the file again from the top.
+        // Opening it again from further down starts at the top too.
         fixture.editor->moveCursor(QTextCursor::End);
         QVERIFY(fixture.editor->verticalScrollBar()->value() > 0);
-        fixture.backend.reloadFromDisk();
+        fixture.backend.open(QUrl::fromLocalFile(path));
         QCOMPARE(fixture.editor->textCursor().position(), 0);
         QCOMPARE(fixture.editor->verticalScrollBar()->value(), 0);
+    }
+
+    // With nothing unsaved, an outside change reloads without a sheet, as in
+    // Mac apps, and the caret and the view stay where they were.
+    void followsAnOutsideChangeWithNothingUnsaved() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("followed.md"));
+        QByteArray contents;
+        for (int line = 0; line < 300; ++line)
+            contents += "Line " + QByteArray::number(line) + "\n\n";
+        writeFile(path, contents);
+
+        WindowFixture fixture;
+        QVERIFY(fixture.show());
+        fixture.backend.open(QUrl::fromLocalFile(path));
+        MarkdownEditor *editor = fixture.editor();
+        QTextCursor cursor = editor->textCursor();
+        cursor.setPosition(1500);
+        editor->setTextCursor(cursor);
+        const int scrolled = editor->verticalScrollBar()->value();
+        QVERIFY(scrolled > 0);
+
+        writeFile(path, "Line zero\n\n" + contents.mid(int(qstrlen("Line 0\n\n"))));
+        QTRY_VERIFY(fixture.text().startsWith(QStringLiteral("Line zero\n")));
+        QVERIFY(!sheet(&fixture.window, QStringLiteral("externalChangeSheet")));
+        QVERIFY(!fixture.backend.modified());
+        QCOMPARE(fixture.backend.status(), QStringLiteral("Reloaded"));
+        QCOMPARE(editor->textCursor().position(), 1500);
+        QCOMPARE(editor->verticalScrollBar()->value(), scrolled);
+
+        // Reload on the sheet keeps the place too.
+        fixture.load(QStringLiteral("mine\n") + fixture.text(), 1500);
+        const int scrolledAgain = editor->verticalScrollBar()->value();
+        QVERIFY(scrolledAgain > 0);
+        writeFile(path, contents);
+        QTRY_VERIFY(sheet(&fixture.window, QStringLiteral("externalChangeSheet")));
+        sheet(&fixture.window, QStringLiteral("externalChangeSheet"))
+            ->findChild<QPushButton *>(QStringLiteral("reloadButton"))->click();
+        QTRY_VERIFY(fixture.text().startsWith(QStringLiteral("Line 0\n")));
+        QCOMPARE(editor->textCursor().position(), 1500);
+        QCOMPARE(editor->verticalScrollBar()->value(), scrolledAgain);
+        fixture.backend.discardRecovery();
+    }
+
+    // A change noticed while another dialog is up is asked about once it
+    // closes, by what is unsaved then: the Open panel lets the writer type.
+    void asksAboutADeferredChangeByWhatIsUnsavedThen() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("deferred.md"));
+        writeFile(path, "theirs\n");
+        WindowFixture fixture;
+        QVERIFY(fixture.show());
+        fixture.backend.open(QUrl::fromLocalFile(path));
+
+        QVERIFY(fixture.choose(QStringLiteral("Open…")));
+        QFileDialog *panel = nullptr;
+        QTRY_VERIFY((panel = fixture.window.findChild<QFileDialog *>(QStringLiteral("openPanel")))
+                    && panel->isVisible());
+        emit fixture.backend.externalChangeDetected(false, false);
+        fixture.load(QStringLiteral("typed meanwhile\n"));
+        QVERIFY(fixture.backend.modified());
+        static_cast<QDialog *>(panel)->reject();
+
+        QTRY_VERIFY(sheet(&fixture.window, QStringLiteral("externalChangeSheet")));
+        QCOMPARE(fixture.text(), QStringLiteral("typed meanwhile\n"));
+        sheet(&fixture.window, QStringLiteral("externalChangeSheet"))
+            ->findChild<QPushButton *>(QStringLiteral("keepButton"))->click();
+        fixture.backend.discardRecovery();
     }
 
     void savesInAFolderItCannotWriteNewFilesIn() {
