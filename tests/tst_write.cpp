@@ -28,6 +28,8 @@
 #include <QScrollBar>
 #include <QInputMethodEvent>
 #include <QTextFrame>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <private/qguiapplication_p.h>
 #include <qpa/qplatformtheme.h>
 
@@ -43,6 +45,7 @@
 #include "markdownedits.h"
 #include "markdownhighlighter.h"
 #include "plaintextlayout.h"
+#include "translator.h"
 #include "windowmanager.h"
 
 // Stands in for QApplication at the end of the event filters: a quit that
@@ -383,6 +386,172 @@ private:
     QString m_scheme;
 };
 
+// Write's sources, beside the tests.
+static QString sourceFolder() {
+    return QFileInfo(QFINDTESTDATA("../src/main.cpp")).absolutePath();
+}
+
+// A source file with its comments left out (their examples aren't calls)
+// and its strings kept whole, so neither hides the other.
+static QString withoutComments(const QString &text) {
+    QString out;
+    for (qsizetype i = 0; i < text.size();) {
+        const QChar c = text.at(i);
+        if (text.mid(i, 2) == QLatin1String("//")) {
+            const qsizetype end = text.indexOf(QLatin1Char('\n'), i);
+            i = end < 0 ? text.size() : end;
+        } else if (text.mid(i, 2) == QLatin1String("/*")) {
+            const qsizetype end = text.indexOf(QLatin1String("*/"), i + 2);
+            i = end < 0 ? text.size() : end + 2;
+        } else if (c == QLatin1Char('"') && i > 0 && text.at(i - 1) == QLatin1Char('R')) {
+            // A raw string (a pattern) is no translation; it is left out whole.
+            const qsizetype open = text.indexOf(QLatin1Char('('), i);
+            const QString close = QLatin1Char(')') + text.mid(i + 1, open - i - 1) + QLatin1Char('"');
+            out += QLatin1String("\"\"");
+            i = text.indexOf(close, open) + close.size();
+        } else if (c == QLatin1Char('"') || c == QLatin1Char('\'')) {
+            qsizetype end = i + 1;
+            while (end < text.size() && text.at(end) != c)
+                end += text.at(end) == QLatin1Char('\\') ? 2 : 1;
+            out += text.mid(i, end + 1 - i);
+            i = end + 1;
+        } else {
+            out += c;
+            ++i;
+        }
+    }
+    return out;
+}
+
+// Every text the sources hand to tr(), and whether any call also passes it
+// a count (its third argument). A call whose text isn't a literal can't be
+// in a catalog, and is reported in `problems`.
+static QMap<QString, bool> translatables(const QString &folder, QStringList *problems) {
+    static const QRegularExpression call(QStringLiteral(R"(\btr\s*\()"));
+    static const QRegularExpression literal(QStringLiteral(R"re(^\s*"((?:\\.|[^"\\])*)")re"));
+    QMap<QString, bool> found;
+    const QStringList filters{QStringLiteral("*.cpp"), QStringLiteral("*.h"), QStringLiteral("*.mm")};
+    for (const QFileInfo &info : QDir(folder).entryInfoList(filters, QDir::Files)) {
+        QFile file(info.filePath());
+        if (!file.open(QIODevice::ReadOnly))
+            continue;
+        const QString code = withoutComments(QString::fromUtf8(file.readAll()));
+        for (auto calls = call.globalMatch(code); calls.hasNext();) {
+            const auto match = calls.next();
+            qsizetype at = match.capturedEnd();
+            const auto part = literal.match(code.mid(at));
+            if (!part.hasMatch()) {
+                *problems << info.fileName() + QStringLiteral(": not a literal: ")
+                                 + code.mid(match.capturedStart(), 60);
+                continue;
+            }
+            const QString text = part.captured(1).replace(QStringLiteral("\\\""), QStringLiteral("\""));
+            at += part.capturedEnd();
+            // The arguments after the text, up to the call's closing parenthesis.
+            int depth = 0, commas = 0;
+            for (; at < code.size(); ++at) {
+                const QChar c = code.at(at);
+                if (c == QLatin1Char('"') || c == QLatin1Char('\'')) {
+                    for (++at; at < code.size() && code.at(at) != c;
+                         at += code.at(at) == QLatin1Char('\\') ? 2 : 1) { }
+                } else if (c == QLatin1Char('(') || c == QLatin1Char('[') || c == QLatin1Char('{')) {
+                    ++depth;
+                } else if (c == QLatin1Char(')') || c == QLatin1Char(']') || c == QLatin1Char('}')) {
+                    if (depth-- == 0)
+                        break;
+                } else if (c == QLatin1Char(',') && depth == 0) {
+                    ++commas;
+                }
+            }
+            found[text] = found.value(text) || commas >= 2;
+        }
+    }
+    return found;
+}
+
+// Qt names the items of the application menu, the one under Write's name,
+// and asks the translator for them itself.
+static const QStringList qtApplicationMenu{QStringLiteral("Services"), QStringLiteral("Hide %1"),
+                                           QStringLiteral("Hide Others"), QStringLiteral("Show All"),
+                                           QStringLiteral("Quit %1")};
+
+static QJsonObject readCatalog(const QString &path, QStringList *problems) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        *problems << path + QStringLiteral(": can't be read");
+        return {};
+    }
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+    if (!document.isObject())
+        *problems << path + QStringLiteral(": not a JSON object: ") + error.errorString();
+    return document.object();
+}
+
+// The placeholders in a text, sorted: %1 to %9, and the count (%n).
+static QStringList placeholders(const QString &text) {
+    static const QRegularExpression placeholder(QStringLiteral("%L?[1-9n]"));
+    QStringList found;
+    for (auto it = placeholder.globalMatch(text); it.hasNext();)
+        found << it.next().captured();
+    found.sort();
+    return found;
+}
+
+// What's wrong with the translations in `folder`, measured against its
+// en.json: a language Qt doesn't know, strings en.json doesn't list, empty
+// or broken translations, and plural forms that don't fit the language's
+// rule. A string a catalog lacks is not a problem: the language is not
+// offered until its catalog has every one.
+static QStringList catalogProblems(const QString &folder) {
+    QStringList problems;
+    const QJsonObject english = readCatalog(folder + QStringLiteral("/en.json"), &problems);
+    for (const QFileInfo &file : QDir(folder).entryInfoList({QStringLiteral("*.json")}, QDir::Files)) {
+        const QString code = file.completeBaseName();
+        if (code == QLatin1String("en"))
+            continue;
+        if (QLocale(code).language() == QLocale::C) {
+            problems << file.fileName() + QStringLiteral(": not a language Qt knows");
+            continue;
+        }
+        const QJsonObject catalog = readCatalog(file.filePath(), &problems);
+
+        // The categories the language's rule reaches, and "other" always.
+        QSet<QString> categories{QStringLiteral("other"), Translator::pluralCategory(code, 1000000)};
+        for (long long n = 0; n <= 1000; ++n)
+            categories << Translator::pluralCategory(code, n);
+
+        for (auto it = catalog.begin(); it != catalog.end(); ++it) {
+            const QString where = code + QStringLiteral(": ") + it.key() + QStringLiteral(": ");
+            const QJsonValue source = english.value(it.key());
+            if (source.isUndefined()) {
+                problems << where + QStringLiteral("not in en.json");
+                continue;
+            }
+            if (source.isString()) {
+                if (!it.value().isString() || it.value().toString().isEmpty())
+                    problems << where + QStringLiteral("needs a translation");
+                else if (placeholders(it.value().toString()) != placeholders(it.key()))
+                    problems << where + QStringLiteral("has other placeholders than the English");
+                continue;
+            }
+            const QJsonObject forms = it.value().toObject();
+            const QStringList given = forms.keys();
+            if (!it.value().isObject() || QSet<QString>(given.begin(), given.end()) != categories) {
+                QStringList wanted(categories.begin(), categories.end());
+                wanted.sort();
+                problems << where + QStringLiteral("needs exactly the plural forms ") + wanted.join(QStringLiteral(", "));
+                continue;
+            }
+            for (auto form = forms.begin(); form != forms.end(); ++form) {
+                if (!form.value().toString().contains(QStringLiteral("%n")))
+                    problems << where + form.key() + QStringLiteral(" needs its %n");
+            }
+        }
+    }
+    return problems;
+}
+
 class WriteTest : public QObject {
     Q_OBJECT
 
@@ -393,6 +562,10 @@ private slots:
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope,
                            m_settingsDirectory.path());
+        // English, as the app installs it on a Mac in English: it carries the
+        // plural forms of counted strings.
+        QCOMPARE(m_english.language(), QStringLiteral("en"));
+        QCoreApplication::installTranslator(&m_english);
     }
 
     void countsWords() {
@@ -3478,6 +3651,228 @@ private slots:
         backend->discardRecovery();
     }
 
+    void translatorPicksTheMacLanguage() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        writeFile(dir.filePath(QStringLiteral("en.json")),
+                  R"({"Save": "Save", "Open": "Open", "%n Words": {"one": "%n Word", "other": "%n Words"}})");
+        writeFile(dir.filePath(QStringLiteral("de.json")),
+                  R"({"Save": "Sichern", "Open": "Öffnen", "%n Words": {"one": "%n Wort", "other": "%n Wörter"}})");
+        // French lacks a string, so it is not offered: half a translation
+        // would mix two languages in one menu.
+        writeFile(dir.filePath(QStringLiteral("fr.json")), R"({"Save": "Enregistrer", "Open": "Ouvrir"})");
+        QCOMPARE(Translator::completeLanguages(dir.path()), QStringList({QStringLiteral("en"), QStringLiteral("de")}));
+        QCOMPARE(Translator::missingStrings(dir.path(), QStringLiteral("fr")), QStringList{QStringLiteral("%n Words")});
+
+        Translator german(dir.path(), {QStringLiteral("de-AT")});
+        QCOMPARE(german.language(), QStringLiteral("de"));
+        QCOMPARE(german.translate("MainWindow", "Save"), QStringLiteral("Sichern"));
+        QCOMPARE(german.translate("MainWindow", "%n Words", nullptr, 1), QStringLiteral("%n Wort"));
+        QCOMPARE(german.translate("MainWindow", "%n Words", nullptr, 2), QStringLiteral("%n Wörter"));
+        QVERIFY(german.translate("MainWindow", "Quit").isNull());
+
+        QCOMPARE(Translator(dir.path(), {QStringLiteral("fr-FR"), QStringLiteral("de-DE")}).language(),
+                 QStringLiteral("de"));
+        QCOMPARE(Translator(dir.path(), {QStringLiteral("fr-FR")}).language(), QStringLiteral("en"));
+        QCOMPARE(Translator(dir.path(), {QStringLiteral("en-GB"), QStringLiteral("de-DE")}).language(),
+                 QStringLiteral("en"));
+        Translator english(dir.path(), {QStringLiteral("ja-JP")});
+        QCOMPARE(english.language(), QStringLiteral("en"));
+        QCOMPARE(english.translate("MainWindow", "%n Words", nullptr, 1), QStringLiteral("%n Word"));
+        QCOMPARE(english.translate("MainWindow", "%n Words", nullptr, 0), QStringLiteral("%n Words"));
+    }
+
+    // The Mac names languages with scripts and regions the catalogs don't
+    // use; macOS's own matching finds the catalog for each.
+    void translatorMatchesTheMacLanguageNames() {
+        const QStringList available{QStringLiteral("de"), QStringLiteral("es-MX"), QStringLiteral("no"),
+                                    QStringLiteral("pt"), QStringLiteral("pt-BR"), QStringLiteral("zh-CN"),
+                                    QStringLiteral("zh-TW")};
+        const auto pick = [&](const QStringList &preferred) {
+            return Translator::preferredLanguage(available, preferred);
+        };
+        QCOMPARE(pick({QStringLiteral("de-CH")}), QStringLiteral("de"));
+        QCOMPARE(pick({QStringLiteral("zh-Hans-CN")}), QStringLiteral("zh-CN"));
+        QCOMPARE(pick({QStringLiteral("zh-Hant-TW")}), QStringLiteral("zh-TW"));
+        QCOMPARE(pick({QStringLiteral("nb-NO")}), QStringLiteral("no"));
+        QCOMPARE(pick({QStringLiteral("pt-PT")}), QStringLiteral("pt"));
+        QCOMPARE(pick({QStringLiteral("pt-BR")}), QStringLiteral("pt-BR"));
+        QCOMPARE(pick({QStringLiteral("es-419")}), QStringLiteral("es-MX"));
+        QCOMPARE(pick({QStringLiteral("ja-JP"), QStringLiteral("de-DE")}), QStringLiteral("de"));
+        QCOMPARE(pick({QStringLiteral("en-GB"), QStringLiteral("de-DE")}), QStringLiteral("en"));
+        QCOMPARE(pick({QStringLiteral("ja-JP")}), QStringLiteral("en"));
+    }
+
+    void translatorTakesTheBaseCatalogUnderARegionalOne() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        writeFile(dir.filePath(QStringLiteral("en.json")), R"({"Save": "Save", "Open": "Open"})");
+        writeFile(dir.filePath(QStringLiteral("pt.json")), R"({"Save": "Guardar", "Open": "Abrir"})");
+        writeFile(dir.filePath(QStringLiteral("pt-BR.json")), R"({"Save": "Salvar"})");
+
+        Translator brazil(dir.path(), {QStringLiteral("pt-BR")});
+        QCOMPARE(brazil.language(), QStringLiteral("pt-BR"));
+        QCOMPARE(brazil.translate("MainWindow", "Save"), QStringLiteral("Salvar"));
+        QCOMPARE(brazil.translate("MainWindow", "Open"), QStringLiteral("Abrir"));
+        Translator portugal(dir.path(), {QStringLiteral("pt-PT")});
+        QCOMPARE(portugal.language(), QStringLiteral("pt"));
+        QCOMPARE(portugal.translate("MainWindow", "Save"), QStringLiteral("Guardar"));
+    }
+
+    void translatorPicksPluralForms() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        writeFile(dir.filePath(QStringLiteral("en.json")), R"({"%n Words": {"one": "%n Word", "other": "%n Words"}})");
+        writeFile(dir.filePath(QStringLiteral("ru.json")),
+                  R"({"%n Words": {"one": "%n слово", "few": "%n слова", "many": "%n слов", "other": "%n слова"}})");
+
+        Translator russian(dir.path(), {QStringLiteral("ru-RU")});
+        QCOMPARE(russian.translate("MainWindow", "%n Words", nullptr, 21), QStringLiteral("%n слово"));
+        QCOMPARE(russian.translate("MainWindow", "%n Words", nullptr, 22), QStringLiteral("%n слова"));
+        QCOMPARE(russian.translate("MainWindow", "%n Words", nullptr, 25), QStringLiteral("%n слов"));
+        QCOMPARE(QCoreApplication::translate("MainWindow", "%n Words", nullptr, 1), QStringLiteral("1 Word"));
+    }
+
+    // A language whose catalog covers en.json takes the whole interface: the
+    // menu bar, the status line, the find bar and the sheets. A stand-in
+    // German marks each string, so one left in English shows.
+    void showsTheInterfaceInTheMacLanguage() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        QStringList problems;
+        const QJsonObject english = readCatalog(sourceFolder() + QStringLiteral("/i18n/en.json"), &problems);
+        QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
+        QJsonObject marked;
+        for (auto it = english.begin(); it != english.end(); ++it) {
+            if (it.value().isObject())
+                marked.insert(it.key(), QJsonObject{{QStringLiteral("one"), QStringLiteral("%n Wort")},
+                                                    {QStringLiteral("other"), QStringLiteral("%n Wörter")}});
+            else
+                marked.insert(it.key(), QStringLiteral("‹") + it.key() + QStringLiteral("›"));
+        }
+        writeFile(dir.filePath(QStringLiteral("en.json")), QJsonDocument(english).toJson());
+        writeFile(dir.filePath(QStringLiteral("de.json")), QJsonDocument(marked).toJson());
+        Translator german(dir.path(), {QStringLiteral("de-DE")});
+        QCOMPARE(german.language(), QStringLiteral("de"));
+        QCoreApplication::installTranslator(&german);
+        const auto removeGerman = qScopeGuard([&german] { QCoreApplication::removeTranslator(&german); });
+
+        WindowFixture fixture;
+        QVERIFY(fixture.show());
+        for (QAction *menuAction : fixture.window.menuBar()->actions()) {
+            QVERIFY2(menuAction->text().startsWith(u'‹'), qPrintable(menuAction->text()));
+            for (QAction *action : menuAction->menu()->actions())
+                QVERIFY2(action->isSeparator() || action->text().startsWith(u'‹'), qPrintable(action->text()));
+        }
+        QCOMPARE(fixture.window.windowTitle(), QStringLiteral("‹Untitled›.md[*]"));
+        QCOMPARE(fixture.window.findBar()->searchField()->placeholderText(), QStringLiteral("‹Find›"));
+        // Qt asks for the application menu's items in a context of its own.
+        QCOMPARE(QCoreApplication::translate("MAC_APPLICATION_MENU", "Quit %1"), QStringLiteral("‹Quit %1›"));
+
+        auto *words = fixture.window.findChild<QLabel *>(QStringLiteral("wordCountLabel"));
+        auto *status = fixture.window.findChild<QLabel *>(QStringLiteral("statusLabel"));
+        QVERIFY(words && status);
+        fixture.editor()->setFocus();
+        QTest::keyClicks(fixture.editor(), QStringLiteral("one"));
+        QTRY_COMPARE(words->text(), QStringLiteral("1 Wort"));
+        QTest::keyClicks(fixture.editor(), QStringLiteral(" two"));
+        QTRY_COMPARE(words->text(), QStringLiteral("2 Wörter"));
+
+        QVERIFY(fixture.choose(QStringLiteral("‹Close Window›")));
+        QTRY_VERIFY(sheet(&fixture.window, QStringLiteral("unsavedChangesSheet")));
+        QMessageBox *asked = sheet(&fixture.window, QStringLiteral("unsavedChangesSheet"));
+        QCOMPARE(asked->text(),
+                 QStringLiteral("‹Do you want to save the changes you made to “‹Untitled›.md”?›"));
+        QCOMPARE(asked->button(QMessageBox::Save)->text(), QStringLiteral("‹Save›"));
+        QCOMPARE(asked->button(QMessageBox::Discard)->text(), QStringLiteral("‹Don't Save›"));
+        QCOMPARE(asked->button(QMessageBox::Cancel)->text(), QStringLiteral("‹Cancel›"));
+        asked->button(QMessageBox::Cancel)->click();
+        QTRY_VERIFY(!sheet(&fixture.window, QStringLiteral("unsavedChangesSheet")));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        fixture.backend.saveAs(QUrl::fromLocalFile(directory.filePath(QStringLiteral("s.md"))));
+        QCOMPARE(status->text(), QStringLiteral("‹Saved›"));
+        fixture.backend.discardRecovery();
+    }
+
+    void englishCatalogMatchesTheSources() {
+        // en.json is what translators work from: every text the sources
+        // translate is in it, as itself or, when a count is passed, as its
+        // English plural forms, and so is every text Qt asks for in Write's
+        // application menu; nothing else is.
+        QStringList problems;
+        QMap<QString, bool> used = translatables(sourceFolder(), &problems);
+        QVERIFY(used.value(QStringLiteral("%n Words")));
+        QVERIFY(used.contains(QStringLiteral("Enter Full Screen")));
+        for (const QString &text : qtApplicationMenu)
+            used.insert(text, false);
+        const QJsonObject english = readCatalog(sourceFolder() + QStringLiteral("/i18n/en.json"), &problems);
+        for (auto it = used.begin(); it != used.end(); ++it) {
+            const QJsonValue value = english.value(it.key());
+            if (value.isUndefined())
+                problems << QStringLiteral("missing from en.json: ") + it.key();
+            else if (it.value() && (value.toObject().keys() != QStringList{"one", "other"}
+                                    || value.toObject().value("other").toString() != it.key()))
+                problems << QStringLiteral("counted, so needs its one and other forms: ") + it.key();
+            else if (!it.value() && value.toString() != it.key())
+                problems << QStringLiteral("should be itself: ") + it.key();
+        }
+        for (const QString &key : english.keys())
+            if (!used.contains(key))
+                problems << QStringLiteral("in en.json but no source translates it: ") + key;
+        QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
+    }
+
+    void catalogsMatchTheEnglishOne() {
+        const QStringList problems = catalogProblems(sourceFolder() + QStringLiteral("/i18n"));
+        QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QLatin1Char('\n'))));
+    }
+
+    void catalogChecksCatchBrokenTranslations() {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        writeFile(dir.filePath(QStringLiteral("en.json")),
+                  R"({"Open %1": "Open %1", "%n Words": {"one": "%n Word", "other": "%n Words"}})");
+        writeFile(dir.filePath(QStringLiteral("pl.json")),
+                  R"({"Open %1": "Otwórz", "%n Words": {"one": "%n słowo", "few": "%n słowa", "other": "%n słowa"}})");
+        writeFile(dir.filePath(QStringLiteral("da.json")), R"({"Open %1": "", "Quit": "Afslut"})");
+        writeFile(dir.filePath(QStringLiteral("zz.json")), "{}");
+        QStringList problems = catalogProblems(dir.path());
+        problems.sort();
+        QCOMPARE(problems, QStringList({QStringLiteral("da: Open %1: needs a translation"),
+                                        QStringLiteral("da: Quit: not in en.json"),
+                                        QStringLiteral("pl: %n Words: needs exactly the plural forms few, many, one, other"),
+                                        QStringLiteral("pl: Open %1: has other placeholders than the English"),
+                                        QStringLiteral("zz.json: not a language Qt knows")}));
+    }
+
+    // The catalogs are compiled in, and macOS is told of each language Write
+    // shows in full, so it can offer the language for Write alone in System
+    // Settings and localize its own panels to match.
+    void declaresItsLanguagesToMacOS() {
+        const QString folder = sourceFolder() + QStringLiteral("/i18n");
+        QCOMPARE(QDir(QStringLiteral(":/i18n")).entryList(QDir::Files),
+                 QDir(folder).entryList({QStringLiteral("*.json")}, QDir::Files));
+        QCOMPARE(Translator::completeLanguages(QStringLiteral(":/i18n")), Translator::completeLanguages(folder));
+
+        QFile plist(QFINDTESTDATA("../macos/Info.plist"));
+        QVERIFY(plist.open(QIODevice::ReadOnly));
+        static const QRegularExpression declared(
+            QStringLiteral(R"(<key>CFBundleLocalizations</key>\s*<array>(.*?)</array>)"),
+            QRegularExpression::DotMatchesEverythingOption);
+        const auto match = declared.match(QString::fromUtf8(plist.readAll()));
+        QVERIFY(match.hasMatch());
+        QStringList languages;
+        static const QRegularExpression string(QStringLiteral("<string>([^<]*)</string>"));
+        for (auto it = string.globalMatch(match.captured(1)); it.hasNext();)
+            languages << it.next().captured(1);
+        QStringList complete = Translator::completeLanguages(folder);
+        languages.sort();
+        complete.sort();
+        QCOMPARE(languages, complete);
+    }
+
     // Write's interface is widgets: the app carries no Qt Quick or QML, and
     // with them no JavaScript engine.
     void linksNoQtQuick() {
@@ -5317,6 +5712,7 @@ private:
     }
 
     QTemporaryDir m_settingsDirectory;
+    Translator m_english{QStringLiteral(":/i18n"), {QStringLiteral("en")}};
 };
 
 QTEST_MAIN(WriteTest)

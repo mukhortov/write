@@ -78,6 +78,8 @@ public:
     static int countWords(const QString &text);
     static QString normalizedLinkUrl(const QString &clipboardText);
     static QString suggestedFileName(const QString &text);
+    // The Open and Save panels' file types.
+    static QStringList documentFilters();
     static QFont printFont(const QFont &editorFont, qreal screenDpi);
 
     void attachDocument(QTextDocument *document);

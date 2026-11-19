@@ -2,12 +2,14 @@
 #include <QFont>
 #include <QApplication>
 #include <QDir>
+#include <QLocale>
 #include <QUrl>
 
 #include "appeventfilter.h"
 #include "backend.h"
 #include "cli.h"
 #include "systemtheme.h"
+#include "translator.h"
 #include "windowmanager.h"
 
 int main(int argc, char *argv[]) {
@@ -24,6 +26,12 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("write"));
     app.setApplicationVersion(QStringLiteral(WRITE_VERSION));
+
+    // In the language macOS picks for Write, installed before any window is
+    // built; a right-to-left language mirrors the windows.
+    Translator translator;
+    app.installTranslator(&translator);
+    app.setLayoutDirection(QLocale(translator.language()).textDirection());
 
     Backend::addFonts(QDir(QCoreApplication::applicationDirPath() + QStringLiteral("/../Resources/Fonts")));
 

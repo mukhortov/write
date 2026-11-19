@@ -136,24 +136,24 @@ void MainWindow::buildMenus() {
     // Every command is in the menu bar, which macOS draws at the top of the
     // screen, and each key belongs to its menu item alone: Qt finds a key
     // claimed twice ambiguous and runs neither.
-    QMenu *file = menuBar()->addMenu(QStringLiteral("File"));
-    addCommand(file, QStringLiteral("New Window"), QKeySequence(QStringLiteral("Ctrl+N")),
+    QMenu *file = menuBar()->addMenu(tr("File"));
+    addCommand(file, tr("New Window"), QKeySequence(QStringLiteral("Ctrl+N")),
                [this]() { m_backend->newWindow(); });
-    addCommand(file, QStringLiteral("Open…"), QKeySequence(QStringLiteral("Ctrl+O")),
+    addCommand(file, tr("Open…"), QKeySequence(QStringLiteral("Ctrl+O")),
                [this]() { m_backend->openDialog(); });
     file->addSeparator();
-    addCommand(file, QStringLiteral("Save"), QKeySequence(QStringLiteral("Ctrl+S")),
+    addCommand(file, tr("Save"), QKeySequence(QStringLiteral("Ctrl+S")),
                [this]() { m_backend->save(); });
-    addCommand(file, QStringLiteral("Save As…"), QKeySequence(QStringLiteral("Ctrl+Shift+S")),
+    addCommand(file, tr("Save As…"), QKeySequence(QStringLiteral("Ctrl+Shift+S")),
                [this]() { m_backend->saveAsDialog(); });
     file->addSeparator();
-    addCommand(file, QStringLiteral("Print…"), QKeySequence(QStringLiteral("Ctrl+P")),
+    addCommand(file, tr("Print…"), QKeySequence(QStringLiteral("Ctrl+P")),
                [this]() { m_backend->printDocument(); });
     file->addSeparator();
-    addCommand(file, QStringLiteral("Close Window"), QKeySequence(QStringLiteral("Ctrl+W")),
+    addCommand(file, tr("Close Window"), QKeySequence(QStringLiteral("Ctrl+W")),
                [this]() { close(); });
 
-    QMenu *edit = menuBar()->addMenu(QStringLiteral("Edit"));
+    QMenu *edit = menuBar()->addMenu(tr("Edit"));
     const auto onTarget = [this](auto command) {
         return [this, command]() {
             if (auto *field = qobject_cast<QLineEdit *>(editTarget()))
@@ -162,47 +162,47 @@ void MainWindow::buildMenus() {
                 command(m_editor);
         };
     };
-    addCommand(edit, QStringLiteral("Undo"), QKeySequence(QStringLiteral("Ctrl+Z")),
+    addCommand(edit, tr("Undo"), QKeySequence(QStringLiteral("Ctrl+Z")),
                onTarget([](auto *target) { target->undo(); }));
-    QAction *redo = addCommand(edit, QStringLiteral("Redo"), QKeySequence(QStringLiteral("Ctrl+Shift+Z")),
+    QAction *redo = addCommand(edit, tr("Redo"), QKeySequence(QStringLiteral("Ctrl+Shift+Z")),
                                onTarget([](auto *target) { target->redo(); }));
     edit->addSeparator();
-    addCommand(edit, QStringLiteral("Cut"), QKeySequence(QStringLiteral("Ctrl+X")),
+    addCommand(edit, tr("Cut"), QKeySequence(QStringLiteral("Ctrl+X")),
                onTarget([](auto *target) { target->cut(); }));
-    addCommand(edit, QStringLiteral("Copy"), QKeySequence(QStringLiteral("Ctrl+C")),
+    addCommand(edit, tr("Copy"), QKeySequence(QStringLiteral("Ctrl+C")),
                onTarget([](auto *target) { target->copy(); }));
-    addCommand(edit, QStringLiteral("Paste"), QKeySequence(QStringLiteral("Ctrl+V")),
+    addCommand(edit, tr("Paste"), QKeySequence(QStringLiteral("Ctrl+V")),
                onTarget([](auto *target) { target->paste(); }));
-    addCommand(edit, QStringLiteral("Select All"), QKeySequence(QStringLiteral("Ctrl+A")),
+    addCommand(edit, tr("Select All"), QKeySequence(QStringLiteral("Ctrl+A")),
                onTarget([](auto *target) { target->selectAll(); }));
-    addCommand(edit, QStringLiteral("Copy as HTML"), QKeySequence(QStringLiteral("Ctrl+Shift+C")),
+    addCommand(edit, tr("Copy as HTML"), QKeySequence(QStringLiteral("Ctrl+Shift+C")),
                [this]() { m_backend->copyAsHtml(); });
     edit->addSeparator();
-    addCommand(edit, QStringLiteral("Find"), QKeySequence(QStringLiteral("Ctrl+F")),
+    addCommand(edit, tr("Find"), QKeySequence(QStringLiteral("Ctrl+F")),
                [this]() { m_findBar->open(false); });
     // Cmd+H belongs to macOS, which hides the app with it.
-    addCommand(edit, QStringLiteral("Find and Replace"), QKeySequence(QStringLiteral("Ctrl+Alt+F")),
+    addCommand(edit, tr("Find and Replace"), QKeySequence(QStringLiteral("Ctrl+Alt+F")),
                [this]() { m_findBar->open(true); });
     edit->addSeparator();
-    addCommand(edit, QStringLiteral("Bold"), QKeySequence(QStringLiteral("Ctrl+B")),
+    addCommand(edit, tr("Bold"), QKeySequence(QStringLiteral("Ctrl+B")),
                [this]() { m_editor->toggleWrap(QStringLiteral("**")); });
-    addCommand(edit, QStringLiteral("Italic"), QKeySequence(QStringLiteral("Ctrl+I")),
+    addCommand(edit, tr("Italic"), QKeySequence(QStringLiteral("Ctrl+I")),
                [this]() { m_editor->toggleWrap(QStringLiteral("*")); });
-    addCommand(edit, QStringLiteral("Strikethrough"), QKeySequence(QStringLiteral("Ctrl+Shift+X")),
+    addCommand(edit, tr("Strikethrough"), QKeySequence(QStringLiteral("Ctrl+Shift+X")),
                [this]() { m_editor->toggleWrap(QStringLiteral("~~")); });
-    addCommand(edit, QStringLiteral("Link"), QKeySequence(QStringLiteral("Ctrl+K")),
+    addCommand(edit, tr("Link"), QKeySequence(QStringLiteral("Ctrl+K")),
                [this]() { m_editor->insertLink(); });
 
-    QMenu *view = menuBar()->addMenu(QStringLiteral("View"));
-    QAction *bigger = addCommand(view, QStringLiteral("Bigger"), QKeySequence(QStringLiteral("Ctrl+=")),
+    QMenu *view = menuBar()->addMenu(tr("View"));
+    QAction *bigger = addCommand(view, tr("Bigger"), QKeySequence(QStringLiteral("Ctrl+=")),
                                  [this]() { m_backend->increaseTextSize(); });
-    addCommand(view, QStringLiteral("Smaller"), QKeySequence(QStringLiteral("Ctrl+-")),
+    addCommand(view, tr("Smaller"), QKeySequence(QStringLiteral("Ctrl+-")),
                [this]() { m_backend->decreaseTextSize(); });
-    addCommand(view, QStringLiteral("Actual Size"), QKeySequence(QStringLiteral("Ctrl+0")),
+    addCommand(view, tr("Actual Size"), QKeySequence(QStringLiteral("Ctrl+0")),
                [this]() { m_backend->resetTextSize(); });
     // The font is a family only: the size is Bigger and Smaller's, and bold
     // and italic are the Markdown's.
-    QMenu *fonts = view->addMenu(QStringLiteral("Font"));
+    QMenu *fonts = view->addMenu(tr("Font"));
     fonts->menuAction()->setMenuRole(QAction::NoRole);
     m_fontChoice = new QActionGroup(fonts);
     for (const QString &name : Backend::editorFonts()) {
@@ -215,7 +215,7 @@ void MainWindow::buildMenus() {
     connect(m_backend, &Backend::editorFontChanged, this, &MainWindow::tickFont);
     view->addSeparator();
     // Cmd+Ctrl+F, as Qt spells Cmd as Ctrl and the Control key as Meta.
-    m_fullScreen = addCommand(view, QStringLiteral("Enter Full Screen"),
+    m_fullScreen = addCommand(view, tr("Enter Full Screen"),
                               QKeySequence(QStringLiteral("Ctrl+Meta+F")), [this]() {
                                   if (isFullScreen())
                                       showNormal();
@@ -223,10 +223,10 @@ void MainWindow::buildMenus() {
                                       showFullScreen();
                               });
 
-    QMenu *window = menuBar()->addMenu(QStringLiteral("Window"));
-    addCommand(window, QStringLiteral("Minimize"), QKeySequence(QStringLiteral("Ctrl+M")),
+    QMenu *window = menuBar()->addMenu(tr("Window"));
+    addCommand(window, tr("Minimize"), QKeySequence(QStringLiteral("Ctrl+M")),
                [this]() { showMinimized(); }, false);
-    addCommand(window, QStringLiteral("Zoom"), QKeySequence(), [this]() {
+    addCommand(window, tr("Zoom"), QKeySequence(), [this]() {
         if (isMaximized())
             showNormal();
         else
@@ -340,7 +340,7 @@ void MainWindow::applyTheme() {
 
 void MainWindow::updateWordCount() {
     const int words = m_backend->wordCount();
-    m_wordCount->setText(words == 1 ? QStringLiteral("1 Word") : QStringLiteral("%1 Words").arg(words));
+    m_wordCount->setText(tr("%n Words", nullptr, words));
 }
 
 void MainWindow::changeEvent(QEvent *event) {
@@ -348,8 +348,8 @@ void MainWindow::changeEvent(QEvent *event) {
     if (event->type() == QEvent::ActivationChange && isActiveWindow())
         emit activated();
     else if (event->type() == QEvent::WindowStateChange && m_fullScreen)
-        m_fullScreen->setText(isFullScreen() ? QStringLiteral("Exit Full Screen")
-                                             : QStringLiteral("Enter Full Screen"));
+        m_fullScreen->setText(isFullScreen() ? tr("Exit Full Screen")
+                                             : tr("Enter Full Screen"));
 }
 
 void MainWindow::showEvent(QShowEvent *event) {
@@ -407,11 +407,15 @@ void MainWindow::askAboutUnsavedChanges() {
     sheet->setObjectName(QStringLiteral("unsavedChangesSheet"));
     sheet->setAttribute(Qt::WA_DeleteOnClose);
     sheet->setWindowModality(Qt::WindowModal);
-    sheet->setText(QStringLiteral("Do you want to save the changes you made to “%1”?")
+    sheet->setText(tr("Do you want to save the changes you made to “%1”?")
                        .arg(m_backend->fileName()));
-    sheet->setInformativeText(QStringLiteral("Your changes will be lost if you don't save them."));
-    // macOS names the Discard button "Don't Save".
+    sheet->setInformativeText(tr("Your changes will be lost if you don't save them."));
+    // macOS names the Discard button "Don't Save". Qt names the buttons in
+    // English unless its own translations are installed, so Write names them.
     sheet->setStandardButtons(QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel);
+    sheet->button(QMessageBox::Save)->setText(tr("Save"));
+    sheet->button(QMessageBox::Discard)->setText(tr("Don't Save"));
+    sheet->button(QMessageBox::Cancel)->setText(tr("Cancel"));
     sheet->setDefaultButton(QMessageBox::Save);
     sheet->setEscapeButton(QMessageBox::Cancel);
     // Qt draws this sheet itself, and gives Don't Save Cmd+Delete; every Mac
@@ -465,18 +469,15 @@ void MainWindow::cancelPending() {
         emit closeCancelled();
 }
 
-static const QStringList documentFilters = {QStringLiteral("Markdown files (*.md *.markdown)"),
-                                            QStringLiteral("All files (*)")};
-
 // Open is a panel of its own, as in other Mac apps; Save As is a sheet on
 // the window it saves.
 void MainWindow::showOpenPanel() {
-    auto *panel = new QFileDialog(this, QStringLiteral("Open File"));
+    auto *panel = new QFileDialog(this, tr("Open File"));
     panel->setObjectName(QStringLiteral("openPanel"));
     panel->setAttribute(Qt::WA_DeleteOnClose);
     panel->setAcceptMode(QFileDialog::AcceptOpen);
     panel->setFileMode(QFileDialog::ExistingFile);
-    panel->setNameFilters(documentFilters);
+    panel->setNameFilters(Backend::documentFilters());
     // macOS shows an application-modal panel only from exec(); shown any
     // other way it never appears, and still blocks every window. Without a
     // modality the panel stands on its own, as the Open panel of a Mac app does.
@@ -487,11 +488,11 @@ void MainWindow::showOpenPanel() {
 }
 
 void MainWindow::showSavePanel(const QUrl &suggestedUrl) {
-    auto *panel = new QFileDialog(this, QStringLiteral("Save File"));
+    auto *panel = new QFileDialog(this, tr("Save File"));
     panel->setObjectName(QStringLiteral("savePanel"));
     panel->setAttribute(Qt::WA_DeleteOnClose);
     panel->setAcceptMode(QFileDialog::AcceptSave);
-    panel->setNameFilters(documentFilters);
+    panel->setNameFilters(Backend::documentFilters());
     if (suggestedUrl.isLocalFile()) {
         const QFileInfo suggested(suggestedUrl.toLocalFile());
         panel->setDirectory(suggested.absolutePath());
@@ -528,9 +529,9 @@ void MainWindow::askAboutExternalChange(bool deleted, bool locallyModified) {
     sheet->setObjectName(QStringLiteral("externalChangeSheet"));
     sheet->setAttribute(Qt::WA_DeleteOnClose);
     sheet->setWindowModality(Qt::WindowModal);
-    QPushButton *keep = sheet->addButton(QStringLiteral("Keep Mine"), QMessageBox::RejectRole);
+    QPushButton *keep = sheet->addButton(tr("Keep Mine"), QMessageBox::RejectRole);
     keep->setObjectName(QStringLiteral("keepButton"));
-    QPushButton *reload = sheet->addButton(QStringLiteral("Reload"), QMessageBox::AcceptRole);
+    QPushButton *reload = sheet->addButton(tr("Reload"), QMessageBox::AcceptRole);
     reload->setObjectName(QStringLiteral("reloadButton"));
     // Escape keeps a removed file's text, as it is the only copy of it. Over a
     // changed file it does nothing, and the writer picks one.
@@ -565,12 +566,12 @@ void MainWindow::reloadKeepingPlace() {
 // does not, even if Reload had the focus. Should the file come back, Reload
 // returns.
 void MainWindow::describeExternalChange(QMessageBox *sheet, bool deleted, bool locallyModified) {
-    sheet->setText(deleted ? QStringLiteral("File removed") : QStringLiteral("File changed"));
+    sheet->setText(deleted ? tr("File removed") : tr("File changed"));
     sheet->setInformativeText(
-        deleted ? QStringLiteral("This file was removed outside Write. Keep your text as an unsaved document?")
+        deleted ? tr("This file was removed outside Write. Keep your text as an unsaved document?")
         : locallyModified
-            ? QStringLiteral("This file changed outside Write. Reloading will discard your changes.")
-            : QStringLiteral("This file changed outside Write."));
+            ? tr("This file changed outside Write. Reloading will discard your changes.")
+            : tr("This file changed outside Write."));
     auto *keep = sheet->findChild<QPushButton *>(QStringLiteral("keepButton"));
     auto *reload = sheet->findChild<QPushButton *>(QStringLiteral("reloadButton"));
     reload->setVisible(!deleted);

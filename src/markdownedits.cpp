@@ -1,5 +1,6 @@
 #include "markdownedits.h"
 
+#include <QCoreApplication>
 #include <QRegularExpression>
 #include <QTextBlock>
 #include <QTextCursor>
@@ -8,6 +9,11 @@
 #include <algorithm>
 
 namespace {
+
+// The words Write puts in the document for the writer to replace.
+struct Placeholder {
+    Q_DECLARE_TR_FUNCTIONS(MarkdownEdits)
+};
 
 // The text between two positions, with the document's paragraph and line
 // separators both read as \n, for finding the lines in it.
@@ -204,7 +210,7 @@ void insertLink(QTextCursor &cursor, const QString &clipboardUrl) {
     const int start = cursor.selectionStart();
     const int end = cursor.selectionEnd();
     const QString selected = rawTextBetween(cursor.document(), start, end);
-    const QString label = selected.isEmpty() ? QStringLiteral("link text") : selected;
+    const QString label = selected.isEmpty() ? Placeholder::tr("link text") : selected;
     const QString markdown =
         markdownLink(label, clipboardUrl.isEmpty() ? QStringLiteral("https://") : clipboardUrl);
     const int labelLength = int(escapeLinkText(label).size());

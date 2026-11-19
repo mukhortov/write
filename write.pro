@@ -26,6 +26,7 @@ HEADERS += \
     src/markdownhighlighter.h \
     src/plaintextlayout.h \
     src/systemtheme.h \
+    src/translator.h \
     src/windowmanager.h
 
 SOURCES += \
@@ -40,7 +41,14 @@ SOURCES += \
     src/markdownhighlighter.cpp \
     src/plaintextlayout.cpp \
     src/systemtheme.cpp \
+    src/translator.cpp \
     src/windowmanager.cpp
+
+# Every catalog in src/i18n is compiled in, under :/i18n.
+I18N.files = $$files($$PWD/src/i18n/*.json)
+I18N.base = $$PWD/src
+I18N.prefix = /
+RESOURCES += I18N
 
 OBJECTIVE_SOURCES += src/macwindow.mm
 LIBS += -framework AppKit

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QCoreApplication>
 #include <QList>
 #include <QString>
 #include <QTimer>
@@ -22,6 +23,8 @@ struct SearchHighlight {
 // fall in view. A one-letter query can match hundreds of thousands of times
 // in a long document, so each question here is a search, not a walk.
 class SearchMatches {
+    Q_DECLARE_TR_FUNCTIONS(SearchMatches)
+
 public:
     // New results for the query. selectFirst makes the first match current;
     // otherwise the current match is the first at or after where the current

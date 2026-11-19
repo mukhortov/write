@@ -17,7 +17,6 @@
 
 namespace {
 
-const QString startWritingHint = QStringLiteral("# Start writing");
 constexpr qreal spaceBelowText = 220;
 
 }
@@ -166,7 +165,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *event) {
     painter.setFont(font());
     painter.setPen(mutedColour());
     painter.drawText(QRectF(line.left(), line.top(), lineWrapColumnOrWidth(), line.height()),
-                     Qt::AlignLeft | Qt::AlignVCenter, startWritingHint);
+                     Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("# ") + tr("Start writing"));
 }
 
 void MarkdownEditor::focusInEvent(QFocusEvent *event) {

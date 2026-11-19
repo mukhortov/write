@@ -17,6 +17,7 @@ SOURCES += \
     ../src/markdownedits.cpp \
     ../src/markdownhighlighter.cpp \
     ../src/plaintextlayout.cpp \
+    ../src/translator.cpp \
     ../src/windowmanager.cpp
 HEADERS += \
     ../src/appeventfilter.h \
@@ -29,7 +30,13 @@ HEADERS += \
     ../src/markdownedits.h \
     ../src/markdownhighlighter.h \
     ../src/plaintextlayout.h \
+    ../src/translator.h \
     ../src/windowmanager.h
+
+I18N.files = $$files($$PWD/../src/i18n/*.json)
+I18N.base = $$PWD/../src
+I18N.prefix = /
+RESOURCES += I18N
 
 
 OBJECTIVE_SOURCES += ../src/macwindow.mm

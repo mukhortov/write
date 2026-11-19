@@ -6,6 +6,10 @@
 	<string>en</string>
 	<key>CFBundleAllowMixedLocalizations</key>
 	<true/>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Write</string>
 	<key>CFBundleName</key>

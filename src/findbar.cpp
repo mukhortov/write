@@ -59,7 +59,7 @@ QList<SearchHighlight> SearchMatches::inRange(int first, int last, int limit) co
 QString SearchMatches::countText() const {
     if (m_queryLength == 0)
         return {};
-    return QStringLiteral("%1 of %2").arg(m_current + 1).arg(m_starts.size());
+    return tr("%1 of %2").arg(m_current + 1).arg(m_starts.size());
 }
 
 FindBar::FindBar(MarkdownEditor *editor, Backend *backend, QWidget *parent)
@@ -68,28 +68,28 @@ FindBar::FindBar(MarkdownEditor *editor, Backend *backend, QWidget *parent)
 
     m_searchField = new QLineEdit(this);
     m_searchField->setObjectName(QStringLiteral("searchField"));
-    m_searchField->setPlaceholderText(QStringLiteral("Find"));
+    m_searchField->setPlaceholderText(tr("Find"));
     m_searchField->setClearButtonEnabled(true);
     m_count = new QLabel(this);
     m_count->setObjectName(QStringLiteral("matchCount"));
     auto *previous = new QToolButton(this);
     previous->setObjectName(QStringLiteral("previousMatchButton"));
     previous->setArrowType(Qt::LeftArrow);
-    previous->setToolTip(QStringLiteral("Previous"));
+    previous->setToolTip(tr("Previous"));
     auto *next = new QToolButton(this);
     next->setObjectName(QStringLiteral("nextMatchButton"));
     next->setArrowType(Qt::RightArrow);
-    next->setToolTip(QStringLiteral("Next"));
-    auto *done = new QPushButton(QStringLiteral("Done"), this);
+    next->setToolTip(tr("Next"));
+    auto *done = new QPushButton(tr("Done"), this);
     done->setObjectName(QStringLiteral("doneButton"));
 
     m_replaceRow = new QWidget(this);
     m_replaceField = new QLineEdit(m_replaceRow);
     m_replaceField->setObjectName(QStringLiteral("replaceField"));
-    m_replaceField->setPlaceholderText(QStringLiteral("Replace with"));
-    auto *replace = new QPushButton(QStringLiteral("Replace"), m_replaceRow);
+    m_replaceField->setPlaceholderText(tr("Replace with"));
+    auto *replace = new QPushButton(tr("Replace"), m_replaceRow);
     replace->setObjectName(QStringLiteral("replaceButton"));
-    auto *replaceAll = new QPushButton(QStringLiteral("All"), m_replaceRow);
+    auto *replaceAll = new QPushButton(tr("All"), m_replaceRow);
     replaceAll->setObjectName(QStringLiteral("replaceAllButton"));
     // Return in a field belongs to the bar, not to a default button.
     for (QPushButton *button : {done, replace, replaceAll})

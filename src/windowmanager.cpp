@@ -60,18 +60,17 @@ WindowManager::~WindowManager() {
 // menus at once.
 void WindowManager::buildNoWindowMenuBar() {
     m_noWindowMenuBar = std::make_unique<QMenuBar>();
-    QMenu *file = m_noWindowMenuBar->addMenu(QStringLiteral("File"));
+    QMenu *file = m_noWindowMenuBar->addMenu(tr("File"));
 
-    QAction *newWindow = file->addAction(QStringLiteral("New Window"));
+    QAction *newWindow = file->addAction(tr("New Window"));
     newWindow->setShortcut(QKeySequence(QStringLiteral("Ctrl+N")));
     connect(newWindow, &QAction::triggered, this, [this]() { this->newWindow(); });
 
-    QAction *open = file->addAction(QStringLiteral("Open…"));
+    QAction *open = file->addAction(tr("Open…"));
     open->setShortcut(QKeySequence(QStringLiteral("Ctrl+O")));
     connect(open, &QAction::triggered, this, [this]() {
         const QUrl url = QFileDialog::getOpenFileUrl(
-            nullptr, QStringLiteral("Open File"), QUrl(),
-            QStringLiteral("Markdown files (*.md *.markdown);;All files (*)"));
+            nullptr, tr("Open File"), QUrl(), Backend::documentFilters().join(QStringLiteral(";;")));
         if (url.isValid())
             openFile(url);
     });
