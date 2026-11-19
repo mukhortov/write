@@ -1,4 +1,4 @@
-QT = core gui widgets printsupport concurrent testlib
+QT = core gui gui-private widgets printsupport concurrent testlib
 CONFIG += testcase c++17
 CONFIG -= app_bundle
 include(../macos/deployment-target.pri)

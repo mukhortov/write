@@ -233,15 +233,15 @@ void Backend::setDarkMode(bool darkMode) {
 }
 
 void Backend::increaseTextSize() {
-    setTextZoom(steppedTextZoom(1));
+    setTextScale(steppedTextZoom(1));
 }
 
 void Backend::decreaseTextSize() {
-    setTextZoom(steppedTextZoom(-1));
+    setTextScale(steppedTextZoom(-1));
 }
 
 void Backend::resetTextSize() {
-    setTextZoom(1.0);
+    setTextScale(1.0);
 }
 
 // The neighbouring rung, starting from whichever rung the current zoom sits
@@ -254,13 +254,6 @@ qreal Backend::steppedTextZoom(int direction) const {
     }
 
     return textZoomSteps[qBound(0, closest + direction, textZoomStepCount - 1)];
-}
-
-void Backend::setTextZoom(qreal zoom) {
-    // Report the size even when the ladder has run out, so a keypress that
-    // changes nothing still says why.
-    setStatus(QStringLiteral("Text size %1%").arg(qRound(zoom * 100)));
-    setTextScale(zoom);
 }
 
 void Backend::setTextScale(qreal scale) {
@@ -332,6 +325,7 @@ void Backend::open(const QUrl &url) {
     file.seek(0);
     const QByteArray contents = file.readAll();
     loadDocumentText(QString::fromUtf8(contents));
+    emit fileOpened();
     clearRecovery();
     setKnownFileContents(contents, true);
     m_autoSaveSuspended = false;
@@ -561,7 +555,8 @@ bool Backend::editorTextChanged() {
             setStatus(QString());
     } else {
         setModified(true);
-        setStatus(QStringLiteral("Unsaved"));
+        // The dot in the close button shows unsaved changes.
+        setStatus(QString());
         scheduleRecovery();
         scheduleAutoSave();
     }
@@ -779,11 +774,12 @@ int Backend::cursorPositionStep(int position, int direction) const
 }
 
 // Matched in the text itself, ignoring case and the diacritics the query
-// leaves out, so the offsets are the document's.
+// leaves out, so the offsets are the document's. A space in the query finds
+// a non-breaking one too.
 QList<int> Backend::searchMatches(const QString &query) const {
     if (query.isEmpty())
         return {};
-    return MarkdownHighlighter::findMatches(currentDocumentText(), query);
+    return MarkdownHighlighter::findMatches(plainDocumentText(), query);
 }
 
 // One edit command, so a single undo takes the whole replacement back.
@@ -1220,10 +1216,22 @@ QUrl Backend::suggestedSaveUrl() const {
         ? QDir::home()
         : QDir(savedDirectory);
     return QUrl::fromLocalFile(
-        directory.filePath(suggestedFileName(currentDocumentText())));
+        directory.filePath(suggestedFileName(plainDocumentText())));
 }
 
+// toPlainText() turns non-breaking spaces into spaces and line separators
+// into newlines, which saving would write over the file's own characters.
 QString Backend::currentDocumentText() const {
+    if (!m_document)
+        return {};
+    QString text = m_document->toRawText();
+    text.replace(QChar::ParagraphSeparator, QLatin1Char('\n'));
+    return text;
+}
+
+// The same length and offsets as currentDocumentText(), with non-breaking
+// spaces read as spaces and line separators as newlines.
+QString Backend::plainDocumentText() const {
     return m_document ? m_document->toPlainText() : QString();
 }
 

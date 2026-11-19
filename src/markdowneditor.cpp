@@ -55,6 +55,12 @@ MarkdownEditor::MarkdownEditor(Backend *backend, QWidget *parent)
     connect(m_backend, &Backend::themeColorsChanged, this, &MarkdownEditor::applyTheme);
     connect(m_backend, &Backend::darkModeChanged, this, &MarkdownEditor::applyTheme);
     connect(m_backend, &Backend::darkModeChanged, this, &MarkdownEditor::applySearchHighlights);
+    // Loading a file leaves the caret at its end; an opened file starts at
+    // the top.
+    connect(m_backend, &Backend::fileOpened, this, [this]() {
+        moveCursor(QTextCursor::Start);
+        verticalScrollBar()->setValue(0);
+    });
     connect(this, &QTextEdit::cursorPositionChanged, this, &MarkdownEditor::ensureCaretVisible);
     connect(this, &QTextEdit::cursorPositionChanged, this,
             [this]() { m_backend->setCaretPosition(textCursor().position()); });
@@ -192,6 +198,12 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event) {
     const bool command = modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
     const bool shift = modifiers & Qt::ShiftModifier;
     QTextCursor cursor = textCursor();
+    // Qt's keys for a character step: Left and Right, and on a Mac
+    // Control-B and Control-F too.
+    if (event->matches(QKeySequence::MoveToNextChar) || event->matches(QKeySequence::MoveToPreviousChar)) {
+        moveCaretVisibly(event->matches(QKeySequence::MoveToNextChar) ? 1 : -1);
+        return;
+    }
     switch (event->key()) {
     case Qt::Key_Return:
     case Qt::Key_Enter:
@@ -214,12 +226,6 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event) {
                                                  }))
             break;
         setTextCursor(cursor);
-        return;
-    case Qt::Key_Left:
-    case Qt::Key_Right:
-        if (command || shift)
-            break;
-        moveCaretVisibly(event->key() == Qt::Key_Right ? 1 : -1);
         return;
     case Qt::Key_PageUp:
     case Qt::Key_PageDown:

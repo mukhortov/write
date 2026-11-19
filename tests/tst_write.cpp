@@ -28,6 +28,8 @@
 #include <QScrollBar>
 #include <QInputMethodEvent>
 #include <QTextFrame>
+#include <private/qguiapplication_p.h>
+#include <qpa/qplatformtheme.h>
 
 #include <functional>
 #include "cli.h"
@@ -178,6 +180,28 @@ static QString layoutDifference(QTextDocument *qt, QTextDocument *ours, bool hit
     return {};
 }
 
+// Wraps the active platform theme and swaps the keys for the next and
+// previous character, as a platform's own keys may differ from Left and Right.
+class SwappedCharacterKeysTheme : public QPlatformTheme {
+public:
+    explicit SwappedCharacterKeysTheme(QPlatformTheme *base) : m_base(base) {}
+
+    QList<QKeySequence> keyBindings(QKeySequence::StandardKey key) const override {
+        if (key == QKeySequence::MoveToNextChar)
+            return m_base->keyBindings(QKeySequence::MoveToPreviousChar);
+        if (key == QKeySequence::MoveToPreviousChar)
+            return m_base->keyBindings(QKeySequence::MoveToNextChar);
+        return m_base->keyBindings(key);
+    }
+    const QPalette *palette(Palette type) const override { return m_base->palette(type); }
+    const QFont *font(Font type) const override { return m_base->font(type); }
+    QVariant themeHint(ThemeHint hint) const override { return m_base->themeHint(hint); }
+    Qt::ColorScheme colorScheme() const override { return m_base->colorScheme(); }
+
+private:
+    QPlatformTheme *m_base;
+};
+
 // A document with a caret or a selection, for the editing rules alone.
 struct EditCase {
     QTextDocument document;
@@ -192,6 +216,9 @@ struct EditCase {
             cursor.setPosition(position, QTextCursor::KeepAnchor);
     }
     QString text() const { return document.toPlainText(); }
+    // The text as the document holds it, where text() reads a non-breaking
+    // space as a space and a line separator as a newline.
+    QString raw() { return MarkdownEdits::rawTextBetween(&document, 0, document.characterCount() - 1); }
     int caret() const { return cursor.position(); }
     // Return in a document with no code fences.
     void returnKey(bool softBreak = false) { MarkdownEdits::smartReturn(cursor, softBreak, false); }
@@ -945,6 +972,34 @@ private slots:
 
         QCOMPARE(MarkdownEdits::escapeLinkText(QStringLiteral("a[b]\\")),
                  QStringLiteral("a\\[b\\]\\\\"));
+    }
+
+    // Text that goes back into the document keeps its non-breaking spaces and
+    // line separators.
+    void editsKeepNonBreakingSpacesAndLineSeparators() {
+        const QString nbsp(QChar::Nbsp);
+        const QString separator(QChar::LineSeparator);
+        EditCase edit;
+
+        edit.load(QStringLiteral("**a") + nbsp + QStringLiteral("b") + separator + QStringLiteral("c**"), 0, 9);
+        MarkdownEdits::toggleWrap(edit.cursor, QStringLiteral("**"), std::nullopt);
+        QCOMPARE(edit.raw(), QStringLiteral("a") + nbsp + QStringLiteral("b") + separator + QStringLiteral("c"));
+
+        edit.load(QStringLiteral("x") + separator + QStringLiteral("y"), 0, 3);
+        MarkdownEdits::insertLink(edit.cursor, QStringLiteral("https://x.y"));
+        QCOMPARE(edit.raw(), QStringLiteral("[x") + separator + QStringLiteral("y](https://x.y)"));
+
+        // A line separator selected after the words stays outside the link.
+        edit.load(QStringLiteral("a") + nbsp + QStringLiteral("b") + separator, 0, 4);
+        QVERIFY(MarkdownEdits::pasteUrlAsLink(edit.cursor, QStringLiteral("https://x.y")));
+        QCOMPARE(edit.raw(), QStringLiteral("[a") + nbsp + QStringLiteral("b](https://x.y)") + separator);
+
+        // A line separator breaks a line for Tab as \n does, and stays.
+        edit.load(QStringLiteral("- one") + separator + QStringLiteral("- two\n- three"), 0, 19);
+        QVERIFY(MarkdownEdits::nestListItems(edit.cursor, false, [](int) { return false; }));
+        QCOMPARE(edit.raw(), QStringLiteral("    - one") + separator + QStringLiteral("    - two\n    - three"));
+        QVERIFY(MarkdownEdits::nestListItems(edit.cursor, true, [](int) { return false; }));
+        QCOMPARE(edit.raw(), QStringLiteral("- one") + separator + QStringLiteral("- two\n- three"));
     }
 
     void markdownEditsPaste() {
@@ -1715,6 +1770,28 @@ private slots:
         QCOMPARE(edit.cursor.selectionEnd(), 12);
     }
 
+    void characterKeysFollowThePlatformTheme() {
+        EditorFixture fixture;
+        QVERIFY(fixture.show());
+        MarkdownEditor *editor = fixture.editor;
+        editor->setFocus();
+
+        // Qt has no public way to change standard keys, so the test swaps
+        // the platform theme that Qt asks for them.
+        QPlatformTheme *originalTheme = QGuiApplicationPrivate::platform_theme;
+        QVERIFY(originalTheme);
+        SwappedCharacterKeysTheme swappedTheme(originalTheme);
+        QGuiApplicationPrivate::platform_theme = &swappedTheme;
+        const auto restoreTheme = qScopeGuard(
+            [originalTheme] { QGuiApplicationPrivate::platform_theme = originalTheme; });
+
+        fixture.load(QStringLiteral("a😀b"), 1);
+        QTest::keyClick(editor, Qt::Key_Left);
+        QCOMPARE(editor->textCursor().position(), 3);
+        QTest::keyClick(editor, Qt::Key_Right);
+        QCOMPARE(editor->textCursor().position(), 1);
+    }
+
     void stepsOverWholeCharactersWhenTypingAndSaving() {
         EditorFixture fixture;
         QVERIFY(fixture.show());
@@ -2272,6 +2349,14 @@ private slots:
         QCOMPARE(fixture.text(), QStringLiteral("a x b x c"));
         fixture.editor->undo();
         QCOMPARE(fixture.text(), QStringLiteral("a foo b foo c"));
+
+        // The text between the matches goes back as it was, its
+        // non-breaking spaces and line separators too.
+        fixture.load(QStringLiteral("foo a b c foo d"));
+        replaceAllButton->click();
+        QTextDocument *document = fixture.editor->document();
+        QCOMPARE(MarkdownEdits::rawTextBetween(document, 0, document->characterCount() - 1),
+                 QStringLiteral("x a b c x d"));
     }
 
     void replacesEveryMatchInOneUndo() {
@@ -2672,12 +2757,13 @@ private slots:
         QTest::keyClicks(fixture.editor(), QStringLiteral(" two"));
         QTRY_COMPARE(words->text(), QStringLiteral("2 Words"));
 
-        // The title bar names the file, so the status line says only whether
-        // it is saved.
+        // The title bar names the file and its close button shows unsaved
+        // changes, so the status line says only that the file is saved.
         fixture.backend.saveAs(QUrl::fromLocalFile(directory.filePath(QStringLiteral("s.md"))));
         QCOMPARE(status->text(), QStringLiteral("Saved"));
         QTest::keyClicks(fixture.editor(), QStringLiteral(" three"));
-        QTRY_COMPARE(status->text(), QStringLiteral("Unsaved"));
+        QTRY_VERIFY(fixture.window.isWindowModified());
+        QCOMPARE(status->text(), QString());
         fixture.backend.discardRecovery();
     }
 
@@ -3117,15 +3203,15 @@ private slots:
         Backend *secondBackend = windows.backendFor(second);
         QSignalSpy scaleSpy(&windows, &WindowManager::textScaleChanged);
 
-        // The text size is one size for every window. Only the window it was
-        // changed in says so.
+        // The text size is one size for every window, and no status line
+        // reports it.
         firstBackend->increaseTextSize();
         QCOMPARE(firstBackend->textScale(), 1.1);
         QCOMPARE(secondBackend->textScale(), 1.1);
         QCOMPARE(windows.textScale(), 1.1);
         QCOMPARE(scaleSpy.count(), 1);
         QCOMPARE(scaleSpy.constFirst().constFirst().toReal(), 1.1);
-        QCOMPARE(firstBackend->status(), QStringLiteral("Text size 110%"));
+        QCOMPARE(firstBackend->status(), QString());
         QCOMPARE(secondBackend->status(), QString());
         QCOMPARE(second->editor()->fontPixelSize(), 22);
         QCOMPARE(windows.backendFor(windows.newWindow())->textScale(), 1.1);
@@ -4413,7 +4499,6 @@ private slots:
         backend.decreaseTextSize();
         backend.decreaseTextSize();
         QCOMPARE(backend.textScale(), 0.9);
-        QCOMPARE(backend.status(), QStringLiteral("Text size 90%"));
 
         // The ends of the ladder hold instead of running away.
         for (int step = 0; step < 8; ++step)
@@ -4723,6 +4808,61 @@ private slots:
                  QStringLiteral("Recovered unsaved changes; asked.md was not opened."));
         QCOMPARE(editor->property("plainText").toString(), QStringLiteral("recovered"));
         backend.discardRecovery();
+    }
+
+    void savesTheCharactersItOpened() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("spaces.md"));
+        // A non-breaking space and a line separator, which plain text reads
+        // as a space and a newline.
+        const QByteArray original("prix\xc2\xa0" "10\nfirst\xe2\x80\xa8second\n");
+        writeFile(path, original);
+
+        Backend backend;
+        QScopedPointer<MarkdownEditor> editor(makeEditor(backend));
+        QVERIFY(editor);
+        backend.holdAutoSave(true);
+        backend.open(QUrl::fromLocalFile(path));
+        QVERIFY(!backend.modified());
+
+        // An edit taken back leaves nothing unsaved.
+        QTextCursor cursor(editor->document());
+        cursor.movePosition(QTextCursor::End);
+        cursor.insertText(QStringLiteral("more"));
+        QVERIFY(backend.modified());
+        for (int i = 0; i < 4; ++i)
+            cursor.deletePreviousChar();
+        QVERIFY(!backend.modified());
+
+        cursor.insertText(QStringLiteral("more"));
+        backend.save();
+        backend.holdAutoSave(false);
+        QCOMPARE(readFile(path), original + "more");
+    }
+
+    void startsTheCaretAtTheTopOfAnOpenedFile() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("long.md"));
+        QByteArray contents;
+        for (int line = 0; line < 300; ++line)
+            contents += "Line " + QByteArray::number(line) + "\n\n";
+        writeFile(path, contents);
+
+        EditorFixture fixture;
+        QVERIFY(fixture.show());
+        fixture.load(QStringLiteral("before\n\nthe file"), 8);
+        fixture.backend.open(QUrl::fromLocalFile(path));
+        QCOMPARE(fixture.editor->textCursor().position(), 0);
+        QCOMPARE(fixture.editor->verticalScrollBar()->value(), 0);
+
+        // Reloading opens the file again from the top.
+        fixture.editor->moveCursor(QTextCursor::End);
+        QVERIFY(fixture.editor->verticalScrollBar()->value() > 0);
+        fixture.backend.reloadFromDisk();
+        QCOMPARE(fixture.editor->textCursor().position(), 0);
+        QCOMPARE(fixture.editor->verticalScrollBar()->value(), 0);
     }
 
     void savesInAFolderItCannotWriteNewFilesIn() {

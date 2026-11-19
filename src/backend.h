@@ -138,6 +138,7 @@ signals:
     void openDialogRequested();
     void saveDialogRequested(const QUrl &suggestedUrl);
     void saveSucceeded();
+    void fileOpened();
     void externalChangeDetected(bool deleted, bool locallyModified);
     void newWindowRequested();
 
@@ -146,13 +147,13 @@ private:
 
     void loadDocumentText(const QString &text);
     qreal steppedTextZoom(int direction) const;
-    void setTextZoom(qreal zoom);
     void setFileUrl(const QUrl &url);
     void setModified(bool modified);
     void setStatus(const QString &status);
     void saveTo(const QUrl &url);
     QUrl suggestedSaveUrl() const;
     QString currentDocumentText() const;
+    QString plainDocumentText() const;
     void setWordCount(int words);
     void refreshWordCount();
     void scheduleWordCount();

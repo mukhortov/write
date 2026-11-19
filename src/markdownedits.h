@@ -9,6 +9,7 @@
 #include "backend.h"
 
 class QTextCursor;
+class QTextDocument;
 
 // The editor's Markdown rules: what Return, Backspace, pasting and the
 // formatting commands do to the text. Each works on the document a cursor
@@ -22,6 +23,11 @@ QString normalizePlainText(const QString &text);
 QString escapeLinkText(const QString &text);
 QString escapeLinkDestination(const QString &url);
 QString markdownLink(const QString &label, const QString &url);
+
+// The text between two positions as the document holds it, non-breaking
+// spaces and line separators included, with only its paragraph breaks read
+// as \n. Text that is written back is read this way.
+QString rawTextBetween(QTextDocument *document, int from, int to);
 
 // Replaces [start, end). Offsets into the replacement select that part of it,
 // equal ones placing the caret; without them the caret follows it.

@@ -10,13 +10,9 @@
 namespace {
 
 // The text between two positions, with the document's paragraph and line
-// separators read as the \n they were typed as.
+// separators both read as \n, for finding the lines in it.
 QString textBetween(QTextDocument *document, int from, int to) {
-    QTextCursor cursor(document);
-    cursor.setPosition(from);
-    cursor.setPosition(to, QTextCursor::KeepAnchor);
-    QString text = cursor.selectedText();
-    text.replace(QChar::ParagraphSeparator, QLatin1Char('\n'));
+    QString text = MarkdownEdits::rawTextBetween(document, from, to);
     text.replace(QChar::LineSeparator, QLatin1Char('\n'));
     return text;
 }
@@ -100,6 +96,15 @@ QString markdownLink(const QString &label, const QString &url) {
         + escapeLinkDestination(url) + QLatin1Char(')');
 }
 
+QString rawTextBetween(QTextDocument *document, int from, int to) {
+    QTextCursor cursor(document);
+    cursor.setPosition(from);
+    cursor.setPosition(to, QTextCursor::KeepAnchor);
+    QString text = cursor.selectedText();
+    text.replace(QChar::ParagraphSeparator, QLatin1Char('\n'));
+    return text;
+}
+
 QString replaceRange(QTextCursor &cursor, int start, int end, const QString &replacement,
                      std::optional<std::pair<int, int>> select) {
     QTextDocument *document = cursor.document();
@@ -143,7 +148,7 @@ void toggleWrap(QTextCursor &cursor, const QString &marker, const std::optional<
         } else if (start >= span->textEnd) {
             cursor.setPosition(span->end);
         } else {
-            const QString content = textBetween(document, span->contentStart, span->contentEnd);
+            const QString content = rawTextBetween(document, span->contentStart, span->contentEnd);
             const int caret = qMax(0, start - span->contentStart);
             replaceRange(cursor, span->start, span->end, content, std::pair{caret, caret});
         }
@@ -176,7 +181,7 @@ void toggleWrap(QTextCursor &cursor, const QString &marker, const std::optional<
         }
         return false;
     };
-    const QString selected = textBetween(document, start, end);
+    const QString selected = rawTextBetween(document, start, end);
     const QString inner = selected.size() >= 2 * size
         ? selected.mid(size, selected.size() - 2 * size) : QString();
 
@@ -198,7 +203,7 @@ void toggleWrap(QTextCursor &cursor, const QString &marker, const std::optional<
 void insertLink(QTextCursor &cursor, const QString &clipboardUrl) {
     const int start = cursor.selectionStart();
     const int end = cursor.selectionEnd();
-    const QString selected = textBetween(cursor.document(), start, end);
+    const QString selected = rawTextBetween(cursor.document(), start, end);
     const QString label = selected.isEmpty() ? QStringLiteral("link text") : selected;
     const QString markdown =
         markdownLink(label, clipboardUrl.isEmpty() ? QStringLiteral("https://") : clipboardUrl);
@@ -215,10 +220,11 @@ bool pasteUrlAsLink(QTextCursor &cursor, const QString &clipboardUrl) {
     if (!cursor.hasSelection() || clipboardUrl.isEmpty())
         return false;
 
-    const QString selected = textBetween(cursor.document(), cursor.selectionStart(), cursor.selectionEnd());
-    // Spaces selected along with the words stay outside the link.
-    static const QRegularExpression leadingSpace(QStringLiteral("^\\s*"));
-    static const QRegularExpression trailingSpace(QStringLiteral("\\s*$"));
+    const QString selected = rawTextBetween(cursor.document(), cursor.selectionStart(), cursor.selectionEnd());
+    // Spaces and line breaks selected along with the words stay outside the
+    // link.
+    static const QRegularExpression leadingSpace(QStringLiteral("^[\\s\\x{2028}]*"));
+    static const QRegularExpression trailingSpace(QStringLiteral("[\\s\\x{2028}]*$"));
     const QString leading = leadingSpace.match(selected).captured();
     const QString trailing = trailingSpace.match(selected).captured();
     if (leading.size() == selected.size())
@@ -316,7 +322,20 @@ bool nestListItems(QTextCursor &cursor, bool outdent, const std::function<bool(i
     // A selection that ends at the start of a line leaves that line be.
     const int start = lineStart(document, selectionStart);
     const int end = lineEnd(document, qMax(start, selectionEnd - 1));
-    const QStringList lines = textBetween(document, start, end).split(QLatin1Char('\n'));
+    // A line separator breaks a line as \n does, and each line keeps the
+    // break it had.
+    const QString text = rawTextBetween(document, start, end);
+    QStringList lines;
+    QString breaks;
+    qsizetype lineFrom = 0;
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        if (text.at(i) == QLatin1Char('\n') || text.at(i) == QChar::LineSeparator) {
+            lines.append(text.mid(lineFrom, i - lineFrom));
+            breaks.append(text.at(i));
+            lineFrom = i + 1;
+        }
+    }
+    lines.append(text.mid(lineFrom));
 
     // The lines start at an item and hold only lines that belong to one:
     // other items, blanks, and indented lines. A fence indented under an item
@@ -351,7 +370,9 @@ bool nestListItems(QTextCursor &cursor, bool outdent, const std::function<bool(i
                          ? QString(indentColumns(line) + step, QLatin1Char(' ')) + line.mid(indentLength(line))
                          : line);
     }
-    const QString nested = moved.join(QLatin1Char('\n'));
+    QString nested = moved.first();
+    for (qsizetype i = 1; i < moved.size(); ++i)
+        nested += breaks.at(i - 1) + moved.at(i);
 
     // Neither end of the selection leaves its line, even when the indent it
     // sat in is gone, and the selection keeps its direction.

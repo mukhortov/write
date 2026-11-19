@@ -8,6 +8,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QTextCursor>
+#include <QTextDocument>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -231,18 +232,23 @@ void FindBar::replaceAll() {
     flushSearch();
     if (m_matches.count() == 0)
         return;
-    const QString text = m_editor->toPlainText();
+    QTextDocument *document = m_editor->document();
     const QString replacement = m_replaceField->text();
     const int length = m_matches.queryLength();
-    const QList<SearchHighlight> all = m_matches.inRange(0, int(text.size()), m_matches.count());
+    const QList<SearchHighlight> all =
+        m_matches.inRange(0, document->characterCount() - 1, m_matches.count());
+    const int first = all.first().start;
+    // As the document holds it, so the text between the matches keeps its
+    // non-breaking spaces and line separators.
+    const QString text = MarkdownEdits::rawTextBetween(document, first, all.last().start + length);
     QString replaced;
-    int position = all.first().start;
+    int position = first;
     for (const SearchHighlight &match : all) {
-        replaced += QStringView(text).mid(position, match.start - position) + replacement;
+        replaced += QStringView(text).mid(position - first, match.start - position) + replacement;
         position = match.start + length;
     }
     QTextCursor cursor = m_editor->textCursor();
-    MarkdownEdits::replaceRange(cursor, all.first().start, position, replaced);
+    MarkdownEdits::replaceRange(cursor, first, position, replaced);
     m_editor->setTextCursor(cursor);
 }
 
