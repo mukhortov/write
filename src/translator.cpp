@@ -134,7 +134,7 @@ QString Translator::pluralCategory(const QString &language, long long count) {
     if (in({"ja", "ko", "zh-CN", "zh-TW", "th", "vi", "id", "ms"})) return "other";
     if (in({"hi", "bn", "fa", "si"})) return n <= 1 ? "one" : "other";
     if (in({"fr", "pt-BR"})) return n <= 1 ? "one" : millions ? "many" : "other";
-    if (in({"ca", "es-MX", "it", "pt"})) return n == 1 ? "one" : millions ? "many" : "other";
+    if (in({"ca", "es", "es-MX", "it", "pt"})) return n == 1 ? "one" : millions ? "many" : "other";
     if (code == "fil") return (n10 == 4 || n10 == 6 || n10 == 9) ? "other" : "one";
     if (code == "is") return n10 == 1 && n100 != 11 ? "one" : "other";
     if (in({"cs", "sk"})) return n == 1 ? "one" : n >= 2 && n <= 4 ? "few" : "other";
