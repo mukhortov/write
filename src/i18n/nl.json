@@ -4,8 +4,8 @@
     "one": "%n woord",
     "other": "%n woorden"
   },
-  "Actual Size": "Ware grootte",
-  "All": "Alles",
+  "Actual Size": "Werkelijke grootte",
+  "All": "Alle",
   "All files": "Alle bestanden",
   "Bigger": "Groter",
   "Bold": "Vet",
@@ -19,12 +19,12 @@
   "Could not save %1.": "Kon %1 niet bewaren.",
   "Could not write %1.": "Kon niet naar %1 schrijven.",
   "Cut": "Knip",
-  "Do you want to save the changes you made to “%1”?": "Wil je de wijzigingen in “%1” bewaren?",
+  "Do you want to save the changes you made to “%1”?": "Wil je de gemaakte wijzigingen in het document '%1' bewaren?",
   "Don't Save": "Bewaar niet",
   "Done": "Gereed",
   "Edit": "Wijzig",
-  "Enter Full Screen": "Activeer schermvullende weergave",
-  "Exit Full Screen": "Verlaat schermvullende weergave",
+  "Enter Full Screen": "Schakel schermvullende weergave in",
+  "Exit Full Screen": "Schakel schermvullende weergave uit",
   "File": "Archief",
   "File changed": "Bestand gewijzigd",
   "File removed": "Bestand verwijderd",
@@ -73,7 +73,7 @@
   "Show All": "Toon alles",
   "Smaller": "Kleiner",
   "Start writing": "Begin met schrijven",
-  "Strikethrough": "Doorhalen",
+  "Strikethrough": "Doorgehaald",
   "There is no document to print.": "Er is geen document om af te drukken.",
   "This file changed outside Write.": "Dit bestand is buiten Write gewijzigd.",
   "This file changed outside Write. Reloading will discard your changes.": "Dit bestand is buiten Write gewijzigd. Als je het opnieuw laadt, gaan je wijzigingen verloren.",
@@ -83,5 +83,5 @@
   "View": "Weergave",
   "Window": "Venster",
   "Your changes will be lost if you don't save them.": "Je wijzigingen gaan verloren als je ze niet bewaart.",
-  "Zoom": "Zoom"
+  "Zoom": "Vergroot/verklein"
 }
