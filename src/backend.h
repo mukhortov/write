@@ -190,6 +190,8 @@ private:
     qreal m_textZoom = 1.0;
     bool m_loading = false;
     bool m_formattingTypography = false;
+    // Set while the caret's line is restyled to show or hide its markers.
+    bool m_restylingCaret = false;
     int m_lastChangePos = 0;
     int m_lastChangeAdded = 0;
     QTimer m_wordCountTimer;

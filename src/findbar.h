@@ -85,6 +85,8 @@ private:
     void showCurrent(bool selectMatch);
     void updateHighlights();
     void documentChanged();
+    // Another file's text is in the editor, so the matches start over.
+    void documentReplaced();
     void replaceCurrent();
     void replaceAll();
 

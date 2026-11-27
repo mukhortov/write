@@ -580,6 +580,13 @@ private slots:
         QCOMPARE(Backend::countWords(QStringLiteral("か\u3099")), 1); // が, decomposed
         QCOMPARE(Backend::countWords(QStringLiteral("𠀀𠀁 foo")), 3);
         QCOMPARE(Backend::countWords(QStringLiteral("안녕하세요 세계")), 2);
+        // One apostrophe or hyphen joins a word; two in a row, or one at
+        // either end, part it.
+        QCOMPARE(Backend::countWords(QStringLiteral("foo--bar foo- -bar a'-b")), 6);
+        QCOMPARE(Backend::countWords(QStringLiteral("foo-中bar")), 3);
+        // Halfwidth katakana and the prolonged sound mark count as kana.
+        QCOMPARE(Backend::countWords(QStringLiteral("ｺｰﾋｰ")), 4);
+        QCOMPARE(Backend::countWords(QStringLiteral("〆〼")), 2);
         QCOMPARE(Backend::countWords(QString()), 0);
     }
 
@@ -1220,6 +1227,24 @@ private slots:
         edit.load(QStringLiteral("one\n\ntwo"), 7, 4);
         edit.returnKey();
         QCOMPARE(edit.text(), QStringLiteral("one\n\n\no"));
+
+        // A selection in a list item is read from where it starts, whichever
+        // way it was dragged: selecting an item's text leaves an empty
+        // marker, which Return ends along with the selection.
+        edit.load(QStringLiteral("- item"), 6, 2);
+        edit.returnKey();
+        QCOMPARE(edit.text(), QStringLiteral("\n"));
+        edit.load(QStringLiteral("- item"), 2, 6);
+        edit.returnKey();
+        QCOMPARE(edit.text(), QStringLiteral("\n"));
+        // Across lines it is the start's line too: emptied it ends the list,
+        // and with text left it carries on.
+        edit.load(QStringLiteral("- item\nsecond"), 2, 13);
+        edit.returnKey();
+        QCOMPARE(edit.text(), QStringLiteral("\n"));
+        edit.load(QStringLiteral("- item\nsecond"), 4, 13);
+        edit.returnKey();
+        QCOMPARE(edit.text(), QStringLiteral("- it\n- "));
 
         // Lists, numbers and quotes carry their marker down; an empty item ends them.
         edit.load(QStringLiteral("- item"), 6);
@@ -2530,6 +2555,65 @@ private slots:
         QTextDocument *document = fixture.editor->document();
         QCOMPARE(MarkdownEdits::rawTextBetween(document, 0, document->characterCount() - 1),
                  QStringLiteral("x a b c x d"));
+    }
+
+    // A file opened while the bar is open is searched afresh, so Replace and
+    // Replace All act on its matches, not on where the last text had them.
+    void searchesAgainWhenAFileOpens() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString first = directory.filePath(QStringLiteral("first.md"));
+        const QString second = directory.filePath(QStringLiteral("second.md"));
+        const QString empty = directory.filePath(QStringLiteral("empty.md"));
+        writeFile(first, "012345 foo end");
+        writeFile(second, "foo 012345 foo");
+        writeFile(empty, "");
+        FindFixture fixture;
+        QVERIFY(fixture.show());
+        FindBar *findBar = fixture.findBar;
+        auto *count = findBar->findChild<QLabel *>(QStringLiteral("matchCount"));
+        auto *replaceAllButton = findBar->findChild<QPushButton *>(QStringLiteral("replaceAllButton"));
+        QVERIFY(count && replaceAllButton);
+        fixture.backend.open(QUrl::fromLocalFile(first));
+        findBar->open(true);
+        findBar->searchField()->setText(QStringLiteral("foo"));
+        findBar->flushSearch();
+        QCOMPARE(count->text(), QStringLiteral("1 of 1"));
+
+        // With unsaved edits, as when the writer chose Don't Save to open
+        // another file, the first match is current and nothing is selected.
+        QTextCursor cursor = fixture.editor->textCursor();
+        cursor.movePosition(QTextCursor::End);
+        cursor.insertText(QStringLiteral("!"));
+        fixture.backend.open(QUrl::fromLocalFile(second));
+        QCOMPARE(count->text(), QStringLiteral("1 of 2"));
+        QCOMPARE(findBar->matches().currentStart(), 0);
+        QVERIFY(!fixture.editor->textCursor().hasSelection());
+        findBar->replaceField()->setText(QStringLiteral("bar"));
+        replaceAllButton->click();
+        QCOMPARE(fixture.text(), QStringLiteral("bar 012345 bar"));
+
+        // An empty file leaves nothing to replace.
+        fixture.backend.open(QUrl::fromLocalFile(empty));
+        QCOMPARE(findBar->matches().count(), 0);
+        replaceAllButton->click();
+        QCOMPARE(fixture.text(), QString());
+    }
+
+    // A CRLF in the replacement goes in as one line break, and the match
+    // right after what was written comes next.
+    void replacesWithALineBreakAndCarriesOn() {
+        FindFixture fixture;
+        QVERIFY(fixture.show());
+        FindBar *findBar = fixture.findBar;
+        fixture.load(QStringLiteral("foofoofoo"));
+        findBar->open(true);
+        findBar->searchField()->setText(QStringLiteral("foo"));
+        findBar->replaceField()->setText(QStringLiteral("a\r\nb"));
+        QCOMPARE(findBar->replaceField()->text(), QStringLiteral("a\r\nb"));
+        findBar->findChild<QPushButton *>(QStringLiteral("replaceButton"))->click();
+        QCOMPARE(fixture.text(), QStringLiteral("a\nbfoofoo"));
+        QCOMPARE(findBar->matches().currentStart(), 3);
     }
 
     void replacesEveryMatchInOneUndo() {
@@ -4498,6 +4582,23 @@ private slots:
                             }));
     }
 
+    // Code inside a fence starts after the whole opening fence, which can be
+    // longer than three characters, so Return between its characters is not
+    // Return in code.
+    void findsCodePastTheWholeOpeningFence() {
+        EditorFixture fixture;
+        fixture.editor->setPlainText(QStringLiteral("````md\ncode\n````"));
+        QVERIFY(!fixture.backend.insideFence(3));
+        QVERIFY(fixture.backend.insideFence(4));
+        QVERIFY(fixture.backend.insideFence(8));
+        fixture.editor->setPlainText(QStringLiteral("~~~~~\ncode\n~~~~~"));
+        QVERIFY(!fixture.backend.insideFence(4));
+        QVERIFY(fixture.backend.insideFence(5));
+        fixture.editor->setPlainText(QStringLiteral("```\ncode\n```"));
+        QVERIFY(!fixture.backend.insideFence(2));
+        QVERIFY(fixture.backend.insideFence(3));
+    }
+
     void opensFencesOnlyWhereMarkdownDoes() {
         QTextDocument document;
         document.setPlainText(QStringLiteral("```inline``` and _italic_\n"
@@ -4598,6 +4699,31 @@ private slots:
         QVERIFY(document.firstBlock().layout()->formats().constFirst().format.fontPointSize() != 1.0);
         highlighter.setCaret(7);
         QCOMPARE(document.firstBlock().layout()->formats().constFirst().format.fontPointSize(), 1.0);
+
+        // Moving between two spans on one line shows the markers of the one
+        // the caret is in and hides the other's.
+        QTextDocument multi;
+        multi.setPlainText(QStringLiteral("**a** **b**"));
+        MarkdownHighlighter multiHighlighter(&multi);
+        const auto pointSizeAt = [&multi](int index) {
+            for (const auto &range : multi.firstBlock().layout()->formats()) {
+                if (index >= range.start && index < range.start + range.length)
+                    return range.format.fontPointSize();
+            }
+            return qreal(-1);
+        };
+        multiHighlighter.setCaret(2);
+        QVERIFY(pointSizeAt(0) != 1.0);
+        QCOMPARE(pointSizeAt(6), 1.0);
+        multiHighlighter.setCaret(8);
+        QCOMPARE(pointSizeAt(0), 1.0);
+        QVERIFY(pointSizeAt(6) != 1.0);
+        // Within plain text past both, neither shows.
+        multi.setPlainText(QStringLiteral("**a** **b** plain"));
+        multiHighlighter.setCaret(14);
+        multiHighlighter.setCaret(15);
+        QCOMPARE(pointSizeAt(0), 1.0);
+        QCOMPARE(pointSizeAt(6), 1.0);
     }
 
     // A link's destination shows while the caret is in the link, so it can be

@@ -77,6 +77,44 @@ QColor blend(const QColor &from, const QColor &to, qreal amount) {
                             from.blueF() + (to.blueF() - from.blueF()) * amount);
 }
 
+enum class WordCharKind { Other, Joiner, Word, Cjk };
+
+// Characters with Script=Common whose Unicode Script_Extensions include Han,
+// Hiragana or Katakana (e.g. U+30FC "ー" in "コーヒー"), matching PCRE2's
+// (?=[\p{L}\p{N}])[\p{Han}\p{Hiragana}\p{Katakana}].
+bool isCjkCommonLetterOrNumber(char32_t cp) {
+    return cp == 0x3006 || (cp >= 0x3031 && cp <= 0x3035) || cp == 0x303C || cp == 0x30FC
+        || (cp >= 0x3192 && cp <= 0x3195) || (cp >= 0x3220 && cp <= 0x3229)
+        || (cp >= 0x3280 && cp <= 0x3289) || cp == 0xFF70
+        || cp == 0xFF9E || cp == 0xFF9F || (cp >= 0x1D360 && cp <= 0x1D371);
+}
+
+// Only letters and numbers make words: 。 、 「 and the CJK radicals are Han
+// by Script_Extensions, but count as nothing.
+WordCharKind classifyWordChar(char32_t cp) {
+    if (cp < 0x80) {
+        if ((cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z') || (cp >= '0' && cp <= '9'))
+            return WordCharKind::Word;
+        if (cp == '\'' || cp == '-')
+            return WordCharKind::Joiner;
+        return WordCharKind::Other;
+    }
+    if (!QChar::isLetterOrNumber(cp))
+        return WordCharKind::Other;
+    const QChar::Script script = QChar::script(cp);
+    if (script == QChar::Script_Han || script == QChar::Script_Hiragana
+            || script == QChar::Script_Katakana || isCjkCommonLetterOrNumber(cp))
+        return WordCharKind::Cjk;
+    return WordCharKind::Word;
+}
+
+char32_t decodeCodePoint(const QChar *data, qsizetype size, qsizetype &index) {
+    const char16_t unit = data[index++].unicode();
+    if (QChar::isHighSurrogate(unit) && index < size && data[index].isLowSurrogate())
+        return QChar::surrogateToUcs4(unit, data[index++].unicode());
+    return unit;
+}
+
 }
 
 QString Backend::normalizedLinkUrl(const QString &clipboardText) {
@@ -291,7 +329,7 @@ void Backend::attachDocument(QTextDocument *document) {
 
     connect(m_document, &QTextDocument::contentsChange, this,
             [this](int position, int, int charsAdded) {
-                if (m_formattingTypography || m_loading)
+                if (m_formattingTypography || m_loading || m_restylingCaret)
                     return;
                 m_lastChangePos = position;
                 m_lastChangeAdded = charsAdded;
@@ -322,12 +360,24 @@ void Backend::load(const QUrl &url, bool reloading) {
         return;
     }
 
+    // A read that fails part way, on a network volume or a file still in the
+    // cloud, would show part of the file as all of it, and auto-save would
+    // later write that over the rest. Each read is checked, as seeking
+    // clears the error.
     const QByteArray raw = file.readAll();
+    if (file.error() != QFileDevice::NoError) {
+        setStatus(tr("Could not open %1.").arg(targetName));
+        return;
+    }
     // Text mode drops carriage returns, matching how the file is compared
     // and saved later.
     file.setTextModeEnabled(true);
     file.seek(0);
     const QByteArray contents = file.readAll();
+    if (file.error() != QFileDevice::NoError) {
+        setStatus(tr("Could not open %1.").arg(targetName));
+        return;
+    }
     loadDocumentText(QString::fromUtf8(contents));
     emit fileOpened();
     clearRecovery();
@@ -411,11 +461,22 @@ void Backend::reloadFromDisk() {
 
 void Backend::keepExternalVersion() {
     QFile file(m_fileUrl.toLocalFile());
-    if (file.open(QIODevice::ReadOnly)) {
-        const QByteArray raw = file.readAll();
+    QByteArray raw, contents;
+    bool read = file.open(QIODevice::ReadOnly);
+    if (read) {
+        raw = file.readAll();
+        read = file.error() == QFileDevice::NoError;
+    }
+    if (read) {
         file.setTextModeEnabled(true);
         file.seek(0);
-        setKnownFileContents(file.readAll(), true);
+        contents = file.readAll();
+        read = file.error() == QFileDevice::NoError;
+    }
+    // A file that could not be read in full counts as unknown, like a
+    // removed one, rather than as what part of it said.
+    if (read) {
+        setKnownFileContents(contents, true);
         // Keeping our text over an edited file is a deliberate choice to
         // overwrite it, so auto-save may resume, unless saving would change
         // the file's encoding or line endings. A removed file stays removed
@@ -528,7 +589,7 @@ QString Backend::clipboardText() const {
 }
 
 bool Backend::editorTextChanged() {
-    if (m_loading || m_formattingTypography || !m_document)
+    if (m_loading || m_formattingTypography || m_restylingCaret || !m_document)
         return false;
 
     // An empty baseline means a pristine untitled document, but only when there
@@ -572,8 +633,14 @@ bool Backend::editorTextChanged() {
 
 void Backend::setCaretPosition(int position) {
     m_caretPosition = position;
-    if (m_highlighter)
-        m_highlighter->setCaret(position);
+    if (!m_highlighter)
+        return;
+    // Restyling changes formats, not text, but the document reports it as a
+    // change all the same, and checking an unmodified document against its
+    // file on every caret move costs a pass over the whole text.
+    m_restylingCaret = true;
+    m_highlighter->setCaret(position);
+    m_restylingCaret = false;
 }
 
 // The emphasis span of the marker's kind that the caret sits in or against,
@@ -826,8 +893,12 @@ bool Backend::insideFence(int position) const {
     const bool afterOpening = block.previous().userState() >= MarkdownHighlighter::InsideFence;
     const int offset = position - block.position();
     if (opensOrContinues && !afterOpening) {
-        static const QRegularExpression fenceMark(QStringLiteral("[`~]"));
-        return offset >= block.text().indexOf(fenceMark) + 3;
+        // The code starts after the whole opening fence, which can be longer
+        // than three characters.
+        const int fence = block.userState() - MarkdownHighlighter::InsideFence;
+        const int length = fence / 2 + 3;
+        const QChar marker = fence % 2 ? QLatin1Char('~') : QLatin1Char('`');
+        return offset >= block.text().indexOf(marker) + length;
     }
     if (afterOpening && !opensOrContinues)
         return offset < block.text().length();
@@ -1241,33 +1312,44 @@ QString Backend::plainDocumentText() const {
     return m_document ? m_document->toPlainText() : QString();
 }
 
+// A word is a run of letters and numbers, joined across one apostrophe or
+// hyphen (it's, well-known). Unspaced Han and kana count one each and part
+// the words around them. One pass with no copies, as it reads the whole
+// text after each pause in typing; it shares nothing, so any worker thread
+// can run it.
 int Backend::countWords(const QString &text) {
-    // Only letters and numbers: PCRE2 reads \p{Han} as Script_Extensions, which
-    // puts 。 、 「 and the CJK radicals in Han and would count each as a word.
-    // One per thread: counts run on whichever worker is free, and nothing
-    // keeps another thread from counting at the same time.
-    thread_local const QRegularExpression cjkRe(
-        QStringLiteral("(?=[\\p{L}\\p{N}])[\\p{Han}\\p{Hiragana}\\p{Katakana}]"));
-    thread_local const QRegularExpression wordRe(
-        QStringLiteral("[\\p{L}\\p{N}]+(?:['-][\\p{L}\\p{N}]+)*"));
-
-    // Count unspaced Han and kana characters individually, then replace them
-    // so they remain boundaries between surrounding space-delimited words.
+    const QChar *data = text.constData();
+    const qsizetype size = text.size();
     int count = 0;
+    bool inWord = false;
+    bool pendingJoiner = false;
 
-    QRegularExpressionMatchIterator cjkIt = cjkRe.globalMatch(text);
-    while (cjkIt.hasNext()) {
-        cjkIt.next();
-        ++count;
-    }
-
-    QString nonCjkText = text;
-    nonCjkText.replace(cjkRe, QStringLiteral(" "));
-
-    QRegularExpressionMatchIterator it = wordRe.globalMatch(nonCjkText);
-    while (it.hasNext()) {
-        it.next();
-        ++count;
+    for (qsizetype i = 0; i < size;) {
+        switch (classifyWordChar(decodeCodePoint(data, size, i))) {
+        case WordCharKind::Word:
+            if (!inWord)
+                ++count;
+            inWord = true;
+            pendingJoiner = false;
+            break;
+        case WordCharKind::Joiner:
+            if (inWord && !pendingJoiner) {
+                pendingJoiner = true;
+            } else {
+                inWord = false;
+                pendingJoiner = false;
+            }
+            break;
+        case WordCharKind::Cjk:
+            ++count;
+            inWord = false;
+            pendingJoiner = false;
+            break;
+        case WordCharKind::Other:
+            inWord = false;
+            pendingJoiner = false;
+            break;
+        }
     }
     return count;
 }

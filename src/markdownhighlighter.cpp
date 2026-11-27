@@ -12,6 +12,22 @@
 #include <utility>
 #include <vector>
 
+namespace {
+
+// Every kind of inline markup needs one of these, so a line without any
+// has none to find.
+bool hasInlineDelimiters(const QString &text) {
+    return text.contains(QLatin1Char('*')) || text.contains(QLatin1Char('_'))
+        || text.contains(QLatin1Char('[')) || text.contains(QLatin1Char('~'));
+}
+
+// inlineMarkup() with the line's code spans already found, as styling a
+// line needs them for itself too.
+QList<MarkdownHighlighter::InlineMarkup> inlineMarkupWithCode(
+    const QString &text, const QList<MarkdownHighlighter::Span> &code);
+
+} // namespace
+
 MarkdownHighlighter::MarkdownHighlighter(QTextDocument *document)
     : QSyntaxHighlighter(document) {
     rebuildFormats();
@@ -42,21 +58,66 @@ void MarkdownHighlighter::refreshFont() {
     rehighlightAll();
 }
 
+// Restyling a line lays it out again, so a line is restyled only when the
+// caret's move shows or hides markers on it: entering or leaving inline
+// markup. Moving within plain text restyles nothing.
 void MarkdownHighlighter::setCaret(int position) {
-    const QTextBlock left = m_caret.isNull() ? QTextBlock() : m_caret.block();
-    if (m_caret.isNull()) {
+    if (!document())
+        return;
+
+    const int clamped = qBound(0, position, document()->characterCount() - 1);
+    if (!m_caret.isNull() && m_caret.position() == clamped)
+        return;
+
+    const bool hadCaret = !m_caret.isNull();
+    const QTextBlock left = hadCaret ? m_caret.block() : QTextBlock();
+    const int oldOffset = hadCaret ? m_caret.positionInBlock() : -1;
+    if (!hadCaret) {
         m_caret = QTextCursor(document());
         // Loading a file inserts at the caret, which must not drag it along
         // to the end; the editor reports where it really went.
         m_caret.setKeepPositionOnInsert(true);
     }
-    m_caret.setPosition(qBound(0, position, document()->characterCount() - 1));
+    m_caret.setPosition(clamped);
 
-    // Only the lines the caret left and entered can show different markers.
+    const auto touchesMarkup = [](const QTextBlock &block, int offset) {
+        if (!block.isValid() || offset < 0 || block.userState() >= InsideFence
+                || block.previous().userState() >= InsideFence)
+            return false;
+        const QString text = block.text();
+        if (!hasInlineDelimiters(text))
+            return false;
+        const QList<InlineMarkup> markup = inlineMarkup(text);
+        return std::any_of(markup.cbegin(), markup.cend(), [offset](const InlineMarkup &item) {
+            return offset >= item.markers[0].start
+                && offset <= item.markers[1].start + item.markers[1].length;
+        });
+    };
+
     const QTextBlock entered = m_caret.block();
-    if (left.isValid() && left != entered)
-        rehighlightBlock(left);
-    rehighlightBlock(entered);
+    const int newOffset = m_caret.positionInBlock();
+    if (left != entered) {
+        if (touchesMarkup(left, oldOffset))
+            rehighlightBlock(left);
+        if (touchesMarkup(entered, newOffset))
+            rehighlightBlock(entered);
+        return;
+    }
+
+    if (!entered.isValid() || entered.userState() >= InsideFence
+            || entered.previous().userState() >= InsideFence)
+        return;
+    const QString text = entered.text();
+    if (!hasInlineDelimiters(text))
+        return;
+    const QList<InlineMarkup> markup = inlineMarkup(text);
+    const bool visibilityChanged = std::any_of(markup.cbegin(), markup.cend(), [&](const InlineMarkup &item) {
+        const int start = item.markers[0].start;
+        const int end = item.markers[1].start + item.markers[1].length;
+        return (oldOffset >= start && oldOffset <= end) != (newOffset >= start && newOffset <= end);
+    });
+    if (visibilityChanged)
+        rehighlightBlock(entered);
 }
 
 // QSyntaxHighlighter::rehighlight() marks the blocks dirty one at a time, and
@@ -259,9 +320,10 @@ void MarkdownHighlighter::highlightInline(const QString &text) {
     };
 
     // Code keeps its own styling even when emphasis or a link encloses it.
+    const QList<Span> code = codeSpans(text);
     QList<bool> inCode(text.length(), false);
-    for (const Span &code : codeSpans(text)) {
-        for (int i = code.start; i < code.start + code.length; ++i) {
+    for (const Span &span : code) {
+        for (int i = span.start; i < span.start + span.length; ++i) {
             mergeFormat(i, m_codeFormat);
             inCode[i] = true;
         }
@@ -274,7 +336,7 @@ void MarkdownHighlighter::highlightInline(const QString &text) {
         format.setFontStrikeOut(true);
         return format;
     }();
-    QList<InlineMarkup> markup = inlineMarkup(text);
+    QList<InlineMarkup> markup = inlineMarkupWithCode(text, code);
     std::stable_sort(markup.begin(), markup.end(),
                      [](const InlineMarkup &a, const InlineMarkup &b) {
                          return a.content.length > b.content.length;
@@ -310,41 +372,52 @@ void MarkdownHighlighter::highlightInline(const QString &text) {
 
 QList<MarkdownHighlighter::Span> MarkdownHighlighter::codeSpans(const QString &text) {
     QList<Span> spans;
-    if (!text.contains(QLatin1Char('`')))
+    int from = text.indexOf(QLatin1Char('`'));
+    if (from < 0)
         return spans;
 
-    static const QRegularExpression codeRe(QStringLiteral("`([^`]+)`"));
-    int from = 0;
-    while ((from = text.indexOf(QLatin1Char('`'), from)) >= 0) {
+    while (from >= 0) {
         int backslashes = 0;
         for (int i = from - 1; i >= 0 && text.at(i) == QLatin1Char('\\'); --i)
             ++backslashes;
         if (backslashes % 2 != 0) {
-            ++from;
+            from = text.indexOf(QLatin1Char('`'), from + 1);
             continue;
         }
 
         // Backslashes escape opening backticks in prose, but are literal once
         // inside code, including immediately before the closing backtick.
-        const auto match = codeRe.match(text, from, QRegularExpression::NormalMatch,
-                                        QRegularExpression::AnchorAtOffsetMatchOption);
-        if (!match.hasMatch()) {
-            ++from;
+        const int close = text.indexOf(QLatin1Char('`'), from + 1);
+        if (close < 0)
+            break;
+        if (close == from + 1) {
+            from = text.indexOf(QLatin1Char('`'), from + 1);
             continue;
         }
-        spans.append({from, int(match.capturedLength(0))});
-        from = match.capturedEnd(0);
+        spans.append({from, close - from + 1});
+        from = text.indexOf(QLatin1Char('`'), close + 1);
     }
     return spans;
 }
 
-QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const QString &text) {
+namespace {
+
+using InlineMarkup = MarkdownHighlighter::InlineMarkup;
+using Span = MarkdownHighlighter::Span;
+using InlineKind = MarkdownHighlighter::InlineKind;
+
+// Each pattern runs only on a line holding the characters it needs, as most
+// lines hold none and the patterns are the costly part.
+QList<MarkdownHighlighter::InlineMarkup> inlineMarkupWithCode(
+    const QString &text, const QList<MarkdownHighlighter::Span> &code) {
     QList<InlineMarkup> markup;
-    if (!text.contains(QLatin1Char('*')) && !text.contains(QLatin1Char('_'))
-            && !text.contains(QLatin1Char('[')) && !text.contains(QLatin1Char('~'))) {
+    const bool hasStar = text.contains(QLatin1Char('*'));
+    const bool hasUnderscore = text.contains(QLatin1Char('_'));
+    const bool hasBracket = text.contains(QLatin1Char('['));
+    const bool hasTilde = text.contains(QLatin1Char('~'));
+    if (!hasStar && !hasUnderscore && !hasBracket && !hasTilde)
         return markup;
-    }
-    if (isThematicBreak(text))
+    if (MarkdownHighlighter::isThematicBreak(text))
         return markup;
 
     const auto span = [](const QRegularExpressionMatch &match, int group) {
@@ -356,7 +429,6 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     // markers land in a code span is dropped; markup that merely wraps one
     // (**bold with `code` inside**) still applies.
     // A backslash escapes a marker, as it does a backtick: \\*literal\\*.
-    const QList<Span> code = codeSpans(text);
     const auto escaped = [&text](int position) {
         int backslashes = 0;
         for (int i = position - 1; i >= 0 && text.at(i) == QLatin1Char('\\'); --i)
@@ -380,78 +452,100 @@ QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const
     // "***word***" is bold and italic at once, as Ctrl+B then Ctrl+I writes it:
     // the outer two asterisks of each run are bold, the inner one italic. Its
     // runs are then masked so the patterns below do not split them again.
-    QString unclaimed = text;
-    static const QRegularExpression boldItalicRe(
-        QStringLiteral("(?<!\\*)\\*\\*\\*(?![\\s*])(.*?[^\\s*])\\*\\*\\*(?!\\*)"));
-    QRegularExpressionMatchIterator boldItalicMatches = boldItalicRe.globalMatch(text);
-    while (boldItalicMatches.hasNext()) {
-        const QRegularExpressionMatch match = boldItalicMatches.next();
-        const Span whole = span(match, 0);
-        const int end = whole.start + whole.length;
-        if (!append({InlineKind::Bold, {whole.start + 2, whole.length - 4},
-                     {{whole.start, 2}, {end - 2, 2}}}))
-            continue;
-        markup.append({InlineKind::Italic, span(match, 1),
-                       {{whole.start + 2, 1}, {end - 3, 1}}});
-        for (int i : {whole.start, whole.start + 1, whole.start + 2, end - 3, end - 2, end - 1})
-            unclaimed[i] = QChar::ObjectReplacementCharacter;
+    QString unclaimed;
+    if (hasStar && text.contains(QLatin1String("***"))) {
+        static const QRegularExpression boldItalicRe(
+            QStringLiteral("(?<!\\*)\\*\\*\\*(?![\\s*])(.*?[^\\s*])\\*\\*\\*(?!\\*)"));
+        QRegularExpressionMatchIterator boldItalicMatches = boldItalicRe.globalMatch(text);
+        while (boldItalicMatches.hasNext()) {
+            const QRegularExpressionMatch match = boldItalicMatches.next();
+            const Span whole = span(match, 0);
+            const int end = whole.start + whole.length;
+            if (!append({InlineKind::Bold, {whole.start + 2, whole.length - 4},
+                         {{whole.start, 2}, {end - 2, 2}}}))
+                continue;
+            markup.append({InlineKind::Italic, span(match, 1),
+                           {{whole.start + 2, 1}, {end - 3, 1}}});
+            if (unclaimed.isEmpty())
+                unclaimed = text;
+            for (int i : {whole.start, whole.start + 1, whole.start + 2, end - 3, end - 2, end - 1})
+                unclaimed[i] = QChar::ObjectReplacementCharacter;
+        }
     }
+    const QString &remaining = unclaimed.isEmpty() ? text : unclaimed;
 
     // Underscores only delimit emphasis at a word boundary, so identifiers such
     // as snake_case_name read as themselves. Asterisks delimit anywhere.
-    static const QRegularExpression boldRe(
-        QStringLiteral("\\*\\*(.+?)\\*\\*|(?<!\\w)__(.+?)__(?!\\w)"),
-        QRegularExpression::UseUnicodePropertiesOption);
-    QRegularExpressionMatchIterator boldMatches = boldRe.globalMatch(unclaimed);
-    while (boldMatches.hasNext()) {
-        const QRegularExpressionMatch match = boldMatches.next();
-        const Span whole = span(match, 0);
-        const int contentIndex = match.capturedStart(1) >= 0 ? 1 : 2;
-        append({InlineKind::Bold, span(match, contentIndex),
-                {{whole.start, 2}, {whole.start + whole.length - 2, 2}}});
+    if ((hasStar && remaining.contains(QLatin1String("**")))
+            || (hasUnderscore && remaining.contains(QLatin1String("__")))) {
+        static const QRegularExpression boldRe(
+            QStringLiteral("\\*\\*(.+?)\\*\\*|(?<!\\w)__(.+?)__(?!\\w)"),
+            QRegularExpression::UseUnicodePropertiesOption);
+        QRegularExpressionMatchIterator boldMatches = boldRe.globalMatch(remaining);
+        while (boldMatches.hasNext()) {
+            const QRegularExpressionMatch match = boldMatches.next();
+            const Span whole = span(match, 0);
+            const int contentIndex = match.capturedStart(1) >= 0 ? 1 : 2;
+            append({InlineKind::Bold, span(match, contentIndex),
+                    {{whole.start, 2}, {whole.start + whole.length - 2, 2}}});
+        }
     }
 
     // An asterisk delimiter may not be followed (opening) or preceded
     // (closing) by whitespace, so `* first *important* point` keeps its bullet
     // and `2 * 3 * 4` stays literal instead of pairing stray asterisks.
-    static const QRegularExpression italicRe(
-        QStringLiteral("(?<!\\*)\\*(?![\\s*])([^*\\n]*[^\\s*])\\*(?!\\*)|(?<!\\w)_([^_\\n]+)_(?!\\w)"),
-        QRegularExpression::UseUnicodePropertiesOption);
-    QRegularExpressionMatchIterator italicMatches = italicRe.globalMatch(unclaimed);
-    while (italicMatches.hasNext()) {
-        const QRegularExpressionMatch match = italicMatches.next();
-        const Span whole = span(match, 0);
-        const int contentIndex = match.capturedStart(1) >= 0 ? 1 : 2;
-        append({InlineKind::Italic, span(match, contentIndex),
-                {{whole.start, 1}, {whole.start + whole.length - 1, 1}}});
+    if (hasStar || hasUnderscore) {
+        static const QRegularExpression italicRe(
+            QStringLiteral("(?<!\\*)\\*(?![\\s*])([^*\\n]*[^\\s*])\\*(?!\\*)|(?<!\\w)_([^_\\n]+)_(?!\\w)"),
+            QRegularExpression::UseUnicodePropertiesOption);
+        QRegularExpressionMatchIterator italicMatches = italicRe.globalMatch(remaining);
+        while (italicMatches.hasNext()) {
+            const QRegularExpressionMatch match = italicMatches.next();
+            const Span whole = span(match, 0);
+            const int contentIndex = match.capturedStart(1) >= 0 ? 1 : 2;
+            append({InlineKind::Italic, span(match, contentIndex),
+                    {{whole.start, 1}, {whole.start + whole.length - 1, 1}}});
+        }
     }
 
     // Exactly two tildes, opening before text and closing after it.
-    static const QRegularExpression strikeRe(
-        QStringLiteral("(?<!~)~~(?![\\s~])(.*?[^\\s~])~~(?!~)"));
-    QRegularExpressionMatchIterator strikeMatches = strikeRe.globalMatch(unclaimed);
-    while (strikeMatches.hasNext()) {
-        const QRegularExpressionMatch match = strikeMatches.next();
-        const Span whole = span(match, 0);
-        append({InlineKind::Strikethrough, span(match, 1),
-                {{whole.start, 2}, {whole.start + whole.length - 2, 2}}});
+    if (hasTilde && remaining.contains(QLatin1String("~~"))) {
+        static const QRegularExpression strikeRe(
+            QStringLiteral("(?<!~)~~(?![\\s~])(.*?[^\\s~])~~(?!~)"));
+        QRegularExpressionMatchIterator strikeMatches = strikeRe.globalMatch(remaining);
+        while (strikeMatches.hasNext()) {
+            const QRegularExpressionMatch match = strikeMatches.next();
+            const Span whole = span(match, 0);
+            append({InlineKind::Strikethrough, span(match, 1),
+                    {{whole.start, 2}, {whole.start + whole.length - 2, 2}}});
+        }
     }
 
-    static const QRegularExpression linkRe(
-        QStringLiteral("\\[([^\\]]+)\\]\\(((?:\\\\.|\\([^()]*\\)|[^()])+)\\)"));
-    QRegularExpressionMatchIterator linkMatches = linkRe.globalMatch(unclaimed);
-    while (linkMatches.hasNext()) {
-        const QRegularExpressionMatch match = linkMatches.next();
-        const Span whole = span(match, 0);
-        const Span content = span(match, 1);
-        const int contentEnd = content.start + content.length;
-        append({InlineKind::Link, content,
-                {{whole.start, 1},
-                 {contentEnd, whole.start + whole.length - contentEnd}},
-                span(match, 2)});
+    if (hasBracket && remaining.contains(QLatin1String("]("))) {
+        static const QRegularExpression linkRe(
+            QStringLiteral("\\[([^\\]]+)\\]\\(((?:\\\\.|\\([^()]*\\)|[^()])+)\\)"));
+        QRegularExpressionMatchIterator linkMatches = linkRe.globalMatch(remaining);
+        while (linkMatches.hasNext()) {
+            const QRegularExpressionMatch match = linkMatches.next();
+            const Span whole = span(match, 0);
+            const Span content = span(match, 1);
+            const int contentEnd = content.start + content.length;
+            append({InlineKind::Link, content,
+                    {{whole.start, 1},
+                     {contentEnd, whole.start + whole.length - contentEnd}},
+                    span(match, 2)});
+        }
     }
 
     return markup;
+}
+
+} // namespace
+
+QList<MarkdownHighlighter::InlineMarkup> MarkdownHighlighter::inlineMarkup(const QString &text) {
+    if (!hasInlineDelimiters(text))
+        return {};
+    return inlineMarkupWithCode(text, codeSpans(text));
 }
 
 QString MarkdownHighlighter::linkUrlAt(const QString &text, int position) {
@@ -555,20 +649,23 @@ QChar commaBelow(QChar c) {
 // case-folded as the one letter it encodes, which stays a pair: 𐐀 becomes 𐐨.
 QString searchFolded(const QString &text) {
     const char16_t *fold = searchFoldTable();
-    QString folded(text.size(), Qt::Uninitialized);
+    const qsizetype size = text.size();
+    QString folded(size, Qt::Uninitialized);
     const QChar *source = text.constData();
     QChar *target = folded.data();
-    for (qsizetype i = 0; i < text.size(); ++i)
-        target[i] = QChar(fold[source[i].unicode()]);
-    for (qsizetype i = 0; i + 1 < text.size(); ++i) {
-        if (!source[i].isHighSurrogate() || !source[i + 1].isLowSurrogate())
-            continue;
-        const char32_t caseFolded = QChar::toCaseFolded(QChar::surrogateToUcs4(source[i], source[i + 1]));
-        if (QChar::requiresSurrogates(caseFolded)) {
-            target[i] = QChar(QChar::highSurrogate(caseFolded));
-            target[i + 1] = QChar(QChar::lowSurrogate(caseFolded));
+    for (qsizetype i = 0; i < size; ++i) {
+        const char16_t unit = source[i].unicode();
+        if (QChar::isHighSurrogate(unit) && i + 1 < size && source[i + 1].isLowSurrogate()) {
+            const char32_t caseFolded = QChar::toCaseFolded(
+                QChar::surrogateToUcs4(unit, source[i + 1].unicode()));
+            if (QChar::requiresSurrogates(caseFolded)) {
+                target[i] = QChar(QChar::highSurrogate(caseFolded));
+                target[i + 1] = QChar(QChar::lowSurrogate(caseFolded));
+                ++i;
+                continue;
+            }
         }
-        ++i;
+        target[i] = QChar(fold[unit]);
     }
     return folded;
 }

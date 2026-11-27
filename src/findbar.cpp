@@ -123,6 +123,8 @@ FindBar::FindBar(MarkdownEditor *editor, Backend *backend, QWidget *parent)
     connect(replace, &QPushButton::clicked, this, &FindBar::replaceCurrent);
     connect(replaceAll, &QPushButton::clicked, this, &FindBar::replaceAll);
     connect(m_editor, &MarkdownEditor::edited, this, &FindBar::documentChanged);
+    // A load is not an edit, so it is followed apart from them.
+    connect(m_backend, &Backend::fileOpened, this, &FindBar::documentReplaced);
     connect(m_editor, &MarkdownEditor::viewChanged, this, &FindBar::updateHighlights);
 
     m_replaceRow->hide();
@@ -210,19 +212,33 @@ void FindBar::documentChanged() {
         search(false);
 }
 
+// The previous text's matches would point Replace at the wrong places. The
+// first match becomes current without being selected, since the caret
+// starts at the top of an opened file.
+void FindBar::documentReplaced() {
+    if (!isOpen())
+        return;
+    m_searchDelay.stop();
+    const QString query = m_searchField->text();
+    m_matches.update(query.isEmpty() ? QList<int>() : m_backend->searchMatches(query),
+                     int(query.size()), true);
+    showCurrent(false);
+}
+
 // Carries on past what was just written, so a replacement the query also
-// matches is not found again.
+// matches is not found again. What was written can be shorter than the
+// field, as the editor turns a CRLF into one line break.
 void FindBar::replaceCurrent() {
     flushSearch();
     const int start = m_matches.currentStart();
     if (start < 0)
         return;
-    const QString replacement = m_replaceField->text();
     QTextCursor cursor = m_editor->textCursor();
-    MarkdownEdits::replaceRange(cursor, start, start + m_matches.queryLength(), replacement);
+    const QString inserted = MarkdownEdits::replaceRange(cursor, start, start + m_matches.queryLength(),
+                                                         m_replaceField->text());
     m_editor->setTextCursor(cursor);
     m_matches.update(m_backend->searchMatches(m_searchField->text()), m_matches.queryLength(), false);
-    m_matches.setCurrentAtOrAfter(start + int(replacement.size()));
+    m_matches.setCurrentAtOrAfter(start + int(inserted.size()));
     showCurrent(true);
 }
 

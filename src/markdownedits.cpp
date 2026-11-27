@@ -252,16 +252,19 @@ void smartReturn(QTextCursor &cursor, bool softBreak, bool insideFence) {
     }
 
     // Only the lines involved are read; a copy of the whole text costs as
-    // much as the document is long.
+    // much as the document is long. The line is the one the selection
+    // starts on, whichever way it was dragged, as that is what the break
+    // lands after.
     QTextDocument *document = cursor.document();
-    const int position = cursor.position();
-    const int start = lineStart(document, position);
-    const QString line = textBetween(document, start, position);
+    const int selectionStart = cursor.selectionStart();
+    const int selectionEnd = cursor.selectionEnd();
+    const int start = lineStart(document, selectionStart);
+    const QString line = textBetween(document, start, selectionStart);
     static const QRegularExpression item(QStringLiteral("^(\\s*)([-+*]|\\d+[.)]|>+)\\s+(.*)$"));
     const QRegularExpressionMatch match = item.match(line);
     if (match.hasMatch()) {
         if (match.captured(3).isEmpty()) {
-            replaceRange(cursor, start, position, QStringLiteral("\n"));
+            replaceRange(cursor, start, selectionEnd, QStringLiteral("\n"));
         } else {
             QString marker = match.captured(2);
             if (marker.at(0).isDigit())
@@ -276,9 +279,7 @@ void smartReturn(QTextCursor &cursor, bool softBreak, bool insideFence) {
     // nothing to stand apart from, so that break would only be a gap nobody
     // asked for. The break lands on what the selection leaves behind, which
     // is not the caret's line when it was dragged right to left.
-    const int selectionStart = cursor.selectionStart();
-    const int selectionEnd = cursor.selectionEnd();
-    const QString head = textBetween(document, lineStart(document, selectionStart), selectionStart);
+    const QString head = textBetween(document, start, selectionStart);
     const QString rest = textBetween(document, selectionEnd, lineEnd(document, selectionEnd));
     replaceSelection(cursor, isBlank(head) && isBlank(rest) ? QStringLiteral("\n")
                                                             : QStringLiteral("\n\n"));

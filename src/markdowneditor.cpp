@@ -208,7 +208,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event) {
     case Qt::Key_Enter:
         if (command)
             break;
-        MarkdownEdits::smartReturn(cursor, shift, m_backend->insideFence(cursor.position()));
+        MarkdownEdits::smartReturn(cursor, shift, m_backend->insideFence(cursor.selectionStart()));
         setTextCursor(cursor);
         return;
     case Qt::Key_Backspace:
