@@ -2770,8 +2770,10 @@ private slots:
     void putsEveryCommandInTheMenuBar() {
         WindowFixture fixture;
         // Each menu as its title followed by its items, written out as macOS
-        // shows them, keys and all, and a separator as "-".
+        // shows them, keys and all, and a separator as "-". About Write is
+        // the one item macOS moves to the application menu.
         QStringList shown;
+        QStringList movedToApplicationMenu;
         for (QAction *menuAction : fixture.window.menuBar()->actions()) {
             QMenu *menu = menuAction->menu();
             QVERIFY(menu);
@@ -2779,6 +2781,12 @@ private slots:
             for (QAction *action : menu->actions()) {
                 if (action->isSeparator()) {
                     entries += QStringLiteral("-");
+                    continue;
+                }
+                if (action->menuRole() == QAction::AboutRole) {
+                    QVERIFY(action->isEnabled());
+                    QVERIFY(action->shortcut().isEmpty());
+                    movedToApplicationMenu += action->text();
                     continue;
                 }
                 QVERIFY2(action->menuRole() == QAction::NoRole, qPrintable(action->text()));
@@ -2799,6 +2807,7 @@ private slots:
                            "Enter Full Screen ⌃⌘F"),
             QStringLiteral("Window: Minimize ⌘M | Zoom"),
         }));
+        QCOMPARE(movedToApplicationMenu, QStringList{QStringLiteral("About Write")});
     }
 
     void givesEveryKeyOneCommand() {

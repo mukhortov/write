@@ -12,5 +12,8 @@ namespace MacWindow {
 void setTitleBarColour(QWidget *window, const QColor &colour);
 // The colour the title bar shows, or an invalid colour while it is AppKit's.
 QColor titleBarColour(QWidget *window);
+// AppKit's own About panel: the icon, the name and the version from the
+// bundle's Info.plist. Nothing off Cocoa.
+void showAboutPanel();
 
 }

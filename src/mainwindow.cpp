@@ -152,6 +152,11 @@ void MainWindow::buildMenus() {
     file->addSeparator();
     addCommand(file, tr("Close Window"), QKeySequence(QStringLiteral("Ctrl+W")),
                [this]() { close(); });
+    // macOS moves this to the application menu, under Write's name, where Qt
+    // words it itself. It stays on while a sheet waits, as it has no key.
+    QAction *about = file->addAction(tr("About %1").arg(QStringLiteral("Write")));
+    about->setMenuRole(QAction::AboutRole);
+    connect(about, &QAction::triggered, this, []() { MacWindow::showAboutPanel(); });
 
     QMenu *edit = menuBar()->addMenu(tr("Edit"));
     const auto onTarget = [this](auto command) {

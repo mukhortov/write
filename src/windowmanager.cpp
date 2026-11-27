@@ -11,6 +11,7 @@
 #include <algorithm>
 
 #include "backend.h"
+#include "macwindow.h"
 #include "mainwindow.h"
 
 // How far each new window steps down and to the right of the front one, as
@@ -75,10 +76,17 @@ void WindowManager::buildNoWindowMenuBar() {
             openFile(url);
     });
 
+    // In the application menu, as in each window's menus.
+    QAction *about = file->addAction(tr("About %1").arg(QStringLiteral("Write")));
+    about->setMenuRole(QAction::AboutRole);
+    connect(about, &QAction::triggered, this, []() { MacWindow::showAboutPanel(); });
+
     const auto enableWithNoWindow = [this, file]() {
         const bool noWindow = windows().isEmpty();
-        for (QAction *action : file->actions())
-            action->setEnabled(noWindow);
+        for (QAction *action : file->actions()) {
+            if (action->menuRole() != QAction::AboutRole)
+                action->setEnabled(noWindow);
+        }
     };
     connect(this, &WindowManager::windowCountChanged, file, enableWithNoWindow);
     enableWithNoWindow();

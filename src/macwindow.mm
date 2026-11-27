@@ -39,3 +39,11 @@ QColor MacWindow::titleBarColour(QWidget *window) {
     return QColor::fromRgbF(float(colour.redComponent), float(colour.greenComponent),
                             float(colour.blueComponent));
 }
+
+void MacWindow::showAboutPanel() {
+    if (QGuiApplication::platformName() != QLatin1String("cocoa"))
+        return;
+    // The build number is the version too, which AppKit would show again
+    // in brackets after it.
+    [NSApp orderFrontStandardAboutPanelWithOptions:@{NSAboutPanelOptionVersion: @""}];
+}
